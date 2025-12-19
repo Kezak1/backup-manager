@@ -1,5 +1,8 @@
 #define _GNU_SOURCE
-#include <errno.h>
+
+#include "utils.h"
+
+// #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,7 +10,6 @@
 #include <time.h>
 #include <unistd.h>
 #include <signal.h>
-#include "utils.h"
 
 #define ERR(source) \
     (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), kill(0, SIGKILL), exit(EXIT_FAILURE))
@@ -23,7 +25,7 @@ void set_handler(void (*f)(int), int sig_num) {
 }
 
 void sig_exit_handler(int sig_num) {
-    puts("");
+    printf("\n");
     _exit(EXIT_SUCCESS);
 }
 
@@ -32,10 +34,18 @@ void usage() {
 }
 
 int main(void) {
-    set_handler(sig_exit_handler, SIGINT);
-    set_handler(sig_exit_handler, SIGTERM);
+    for(int sig_num = 1; sig_num < NSIG; sig_num++) {
+        if(sig_num == SIGKILL || sig_num == SIGSTOP) continue;
+        
+        if(sig_num == SIGINT || sig_num == SIGTERM) {
+            set_handler(sig_exit_handler, sig_num);
+        } else {
+            set_handler(SIG_IGN, sig_num);
+        }
+    }
 
     printf("Welcome to the backup management system!\n\n");
+    
     while(1) {
         printf("command: ");
 
@@ -47,6 +57,7 @@ int main(void) {
             free_strings(strs, cnt_str);
             break;
         };
+
         size_t l = strlen(line);
         if(l > 0 && line[l - 1] == '\n') {
             line[l - 1] = '\0';
@@ -62,10 +73,13 @@ int main(void) {
                 usage();
             }
         } else if(cnt_str == 3) {
-            for(int i = 0; i < cnt_str; i++) {
-                printf("%s ", strs[i]);
+            if(strcmp(strs[0], "add") == 0) {
+                
             }
-            puts("");
+            // for(int i = 0; i < cnt_str; i++) {
+            //     printf("%s ", strs[i]);
+            // }
+            // printf("\n");
         } else {
             usage();
         }

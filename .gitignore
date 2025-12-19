@@ -1,3 +1,4 @@
 .vscode/
 sop-backup
 *.o
+.idea/

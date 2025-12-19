@@ -1,7 +1,6 @@
-#define _XOPEN_SOURCE 700
+#define _GNU_SOURCE
 #include "utils.h"
 #include <dirent.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <ftw.h>
 #include <stdarg.h>
@@ -13,6 +12,7 @@
 #include <sys/uio.h>
 #include <unistd.h>
 #include <signal.h>
+#include <errno.h>
 
 #define ERR(source) \
     (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), kill(0, SIGKILL), exit(EXIT_FAILURE))
@@ -56,3 +56,69 @@ void free_strings(char** strings, int count)
     }
     free(strings);
 }
+
+ssize_t bulk_read(int fd, char *buf, size_t count)
+{
+    ssize_t c;
+    ssize_t len = 0;
+    do
+    {
+        c = TEMP_FAILURE_RETRY(read(fd, buf, count));
+        if (c < 0)
+            return c;
+        if (c == 0)
+            return len;  // EOF
+        buf += c;
+        len += c;
+        count -= c;
+    } while (count > 0);
+    return len;
+}
+
+ssize_t bulk_write(int fd, char *buf, size_t count)
+{
+    ssize_t c;
+    ssize_t len = 0;
+    do
+    {
+        c = TEMP_FAILURE_RETRY(write(fd, buf, count));
+        if (c < 0)
+            return c;
+        buf += c;
+        len += c;
+        count -= c;
+    } while (count > 0);
+    return len;
+}
+
+// void checked_mkdir(char* path) {
+//     if(mkdir(path, 0755) != 0) {
+//         if(errno != EEXIST) {
+//             ERR("mkdir");
+//         }
+
+//         struct stat s;
+//         if(stat(path, &s)) {
+//             ERR("stat");
+//         }
+//         if(S_ISDIR(s.st_mode)) {
+//             printf("%s is not a valid dir, lol\n", path);
+//             exit(EXIT_SUCCESS);
+//         }
+//     }
+// }
+
+// void path_path(char* path) {
+//     char* tmp = strdup(path);
+//     if(!tmp) {
+//         ERR("strdup");
+//     }
+//     for(char *p = tmp + 1; *p; p++) {
+//         if(*p == '/') {
+//             *p = '\0';
+//             checked_mkdir(tmp);
+//             *p = '/';
+//         }
+//     }
+// }
+
