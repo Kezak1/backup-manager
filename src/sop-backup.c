@@ -28,7 +28,7 @@ void set_handler(void (*f)(int), int sig_num) {
         ERR("sigaction");
     }
 }
-void cleanup_handler(int sig_num) {
+void exit_handler(int sig_num) {
     sig_exit = 1;
 }
 
@@ -46,11 +46,16 @@ int main(void) {
         if (sig_num == SIGKILL || sig_num == SIGSTOP || sig_num == SIGCHLD) continue;
         
         if(sig_num == SIGINT || sig_num == SIGTERM) {
-            set_handler(cleanup_handler, sig_num);
+            set_handler(exit_handler, sig_num);
         } else {
             set_handler(SIG_IGN, sig_num);
         }
     }
+
+    Backups state = {
+        .backups = NULL,
+        .count = 0,
+    };
 
     printf("Welcome to the backup management system!\n\n");
     
@@ -60,7 +65,8 @@ int main(void) {
         char* line = NULL;
         size_t len = 0;
         char** strs;
-        int cnt_str = 0;
+        int cnt = 0;
+
         if(getline(&line, &len, stdin) == -1) {
             free(line);
             break;
@@ -70,28 +76,43 @@ int main(void) {
         if(l > 0 && line[l - 1] == '\n') {
             line[l - 1] = '\0';
         }
-        strs = split_string(line, &cnt_str);
-        
-        if(cnt_str == 1) {
+        strs = split_string(line, &cnt);
+
+        if(cnt == 0) {
+            free(line);
+            free_strings(strs, cnt);
+            usage();
+            continue;
+        }
+        if(cnt == 1) {
             if(strcmp(strs[0], "exit") == 0) {
-                cleanup_handler(0);
+                free(line);
+                free_strings(strs, cnt);
+                clean_up_all(&state);
+            } else if(strcmp(strs[0], "list") == 0) {
+                cmd_list(&state);
             } else {
                 usage();
             }
-        }
-        else if(cnt_str > 2) {;
+        } else if(cnt >= 3) {
             if(strcmp(strs[0], "add") == 0) {
-                cmd_add(strs, cnt_str);
+                cmd_add(strs, cnt, &state);
+            } else if(strcmp(strs[0], "end") == 0) {
+                cmd_end(strs, cnt, &state);
+            } else if(strcmp(strs[0], "restore") == 0) {
+                cmd_restore(strs, cnt, &state);
+            } else {
+                usage();
             }
-        } 
-        else {
+        } else {
             usage();
         }
         
         free(line);
-        free_strings(strs, cnt_str);
+        free_strings(strs, cnt);
 
         if(sig_exit) {
+            clean_up_all(&state);
             break;
         }
     }

@@ -1,15 +1,20 @@
+#include <asm-generic/errno-base.h>
+#include <linux/limits.h>
 #define _GNU_SOURCE
 
 #include "utils.h"
+#include "commands.h"
 
 #include <stdio.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-// #include <signal.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <errno.h>
 
 #define FILE_BUF_LEN 256
 
@@ -70,11 +75,7 @@ void copy_symlink(const char* src, const char* target, const char* abs_src, cons
                 char new_path[PATH_MAX];
 
                 int s = snprintf(new_path, sizeof(new_path), "%s%s", abs_target, path + abslen);
-                if(s >= (int)sizeof(new_path)) {
-                    fprintf(stderr, "[ERROR] symlink path too long\n");
-                    return;
-                }
-                if(s < 0) {
+                if(s < 0 || s >= (int)sizeof(new_path)) {
                     ERR("snprintf");
                 }
 
@@ -95,38 +96,203 @@ void copy_symlink(const char* src, const char* target, const char* abs_src, cons
     }
 }
 
-void dfs() {
-    ;
+int find_backup(Backup *b, int n, const char* src, const char* target) {
+    for(int i = 0; i < n; i++) if(strcmp(b[i].src, src) == 0) {
+        for(int j = 0; j < b[i].count; j++) if(strcmp(b[i].targets[j], target) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
-void cmd_add(char** strs, int count) {
+void clean_up_chidren(Backup* b) {
+    int n = b->count;
+    for(int i = 0; i < n; i++) {
+        if(b->children_pids[i] > 0) {
+            if(kill(b->children_pids[i], SIGTERM) == -1) {
+                ERR("kill");
+            }
+        }
+    }
+
+    for(int i = 0; i < n; i++) {
+        if(b->children_pids[i] > 0) {
+            waitpid(b->children_pids[i], NULL, 0);
+        }
+    }
+
+    free(b->src);
+    for(int i = 0; i < n; i++) {
+        free(b->targets);
+    }
+    b->count = 0;
+}
+
+
+void clean_up_all(Backups *state) {
+    for(int i = 0; i < state->count; i++) {
+        clean_up_chidren(&state->backups[i]);
+    }
+    state->count = 0;
+}
+
+
+void child_work();
+
+void dfs(const char* src, const char* target, const char* abs_src, const char* abs_target) {
+    DIR* dir = opendir(src);
+    if(!dir) {
+        ERR("opendir");
+    }
+
+    struct dirent *dp;
+    while((dp = readdir(dir)) != NULL) {
+        if(strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..")) {
+            continue;
+        }
+
+        char src_path[PATH_MAX], target_path[PATH_MAX];
+
+        snprintf(src_path, sizeof(src_path), "%s/%s", src, dp->d_name);
+        snprintf(src_path, sizeof(src_path), "%s/%s", target, dp->d_name);
+
+        struct stat st;
+        if(lstat(src_path, &st) == -1) {
+            ERR("lstat");
+        }
+
+        if(S_ISDIR(st.st_mode)) {
+            if(mkdir(target_path, st.st_mode) == -1) {
+                if(errno != EEXIST){
+                    ERR("mkdir");
+                }
+            }
+
+            dfs(src_path, target_path, abs_src, abs_target);
+        } else if(S_ISLNK(st.st_mode)) {
+            copy_symlink(src_path, target_path, abs_src, abs_target);
+        } else if(S_ISREG(st.st_mode)) {
+            copy_file(src_path, target_path);
+        }
+    }
+
+    if(closedir(dir) == -1) {
+        ERR("closedir");
+    }
+}
+
+void cmd_add(char** strs, int count, Backups *state) {
     char* src = strs[1];
+    int n = count - 2;
+
+    if(n > MAX_TARGETS) {
+        fprintf(stderr, "[ERROR] too many targets, %d is max\n", MAX_TARGETS);
+    }
 
     if(!is_source_valid(src)) {
         fprintf(stderr, "[ERROR] source is not valid directory\n");
         return;
     }
 
-    for(int i = 2; i < count; i++) {
+    char* abs_src = get_realpath(src);
+    if(!abs_src) {
+        ERR("get_realpath");
+        return;
+    }
+
+    char* t[MAX_TARGETS];
+
+    int valid = 1;
+    for(int i = 2; i < count && valid; i++) {
         char* target = strs[i];
 
         int check = is_target_in_source(src, target);
         if(check == -1) {
             fprintf(stderr, "[ERROR] cant resolve the target path\n");
-            return;
+            valid = 0;
+            break;
         }
         if(check == 1) {
             fprintf(stderr, "[ERROR] target %s is inside source %s\n", target, src);
-            return;
+            valid = 0;
+            break;
         }
 
         if(path_exist(target)) {
             if(!is_dir_empty(target)) {
                 fprintf(stderr, "[ERROR] target directory %s is not empty\n", target);
-                return;
+                valid = 0;
+                break;
             }
+            t[i] = get_realpath(target);
+        } else {
+            path_path(target);
+            t[i] = get_realpath(target);
+        }
+
+        if(!t[i]) {
+            ERR("get_realpath");
+        }
+
+        if(find_backup(state->backups, state->count, abs_src, t[i])) {
+            fprintf(stderr, "[ERROR] backup from %s to %s already exists\n", abs_src, t[i]);
+            valid = 0;
+            break;
         }
     }
 
-    printf("LOL ADD\n");
+    if(valid == 0) {
+        free(abs_src) ;
+        for(int i = 0; i < n; i++) {
+            free(t[i]);
+        }
+
+        return;
+    }
+
+    if(state->count >= MAX_BACKUP) {
+        fprintf(stderr,"[ERROR] maximum number of backups has reached %d\n", MAX_BACKUP);
+        free(abs_src);
+        for(int i = 0; i < n; i++) {
+            free(t[i]);
+        }
+        return;
+    }
+
+    Backup *b = &state->backups[state->count];
+    b->src = abs_src;
+    b->count = n;
+    for(int i = 0; i < n; i++) {
+        b->targets[i] = t[i];
+    }
+
+    pid_t pid;
+    for(int i = 0; i < n; i++) {
+        if((pid = fork()) == -1) {
+            ERR("fork");
+        }
+
+        if(pid == 0) {
+            child_work();
+            exit(EXIT_SUCCESS);
+        }
+
+        b->children_pids[i] = pid;
+        printf("[INFO] Started backup of %s for target %s (pid: %d)\n", abs_src, b->targets[i], pid);
+    }
+
+    state->count++;
+    printf("[SUCESS] Backup created, number of targets - %d\n", n);
+}   
+
+
+void cmd_end(char** strs, int count, Backups *state) {
+    ;
+}
+void cmd_restore(char** strs, int count, Backups *state) {
+    ;
+}
+void cmd_list(Backups *state) {
+    ;
 }
