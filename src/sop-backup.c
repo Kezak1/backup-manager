@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 
 #include "utils.h"
+#include "commands.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -32,7 +33,12 @@ void cleanup_handler(int sig_num) {
 }
 
 void usage() {
-    printf("wrong command bozo!\n");
+    printf("USAGE:\n");
+    printf("- adding backup: add <source path> <target path 1> <target path 2> ... <target path n>, n >= 1\n");
+    printf("- ending backup: end <source path> <target path>\n");
+    printf("- restore source from target: restore <source path> <target path>\n");
+    printf("- listing currect added backups: list\n");
+    printf("- exiting the program: exit\n\n");
 }
 
 int main(void) {
@@ -65,7 +71,6 @@ int main(void) {
             line[l - 1] = '\0';
         }
         strs = split_string(line, &cnt_str);
-        printf("%d\n", cnt_str);
         
         if(cnt_str == 1) {
             if(strcmp(strs[0], "exit") == 0) {
@@ -76,12 +81,8 @@ int main(void) {
         }
         else if(cnt_str > 2) {;
             if(strcmp(strs[0], "add") == 0) {
-                
+                cmd_add(strs, cnt_str);
             }
-            for(int i = 0; i < cnt_str; i++) {
-                printf("%s ", strs[i]);
-            }
-            printf("\n");
         } 
         else {
             usage();

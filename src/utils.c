@@ -197,3 +197,62 @@ void path_path(char* path) {
     free(tmp);
 }
 
+char* get_realpath(const char* path) {
+    char* real = realpath(path, NULL);
+    if(!real) {
+        return NULL;
+    }
+    return real;
+}
+
+int is_target_in_source(const char* src, const char* target) {
+    char* abs_src = realpath(src, NULL);
+    if(!abs_src) {
+        ERR("realpath");
+    }
+
+    char* abs_target = realpath(target, NULL);
+
+    if(!abs_target) {
+        char* tmp = strdup(target);
+        if(!tmp) {
+            free(abs_src);
+            ERR("strdup");
+        }
+
+        while(1) {
+            abs_target = realpath(tmp, NULL);
+            if(abs_target) {
+                break;
+            }
+
+            char* last_slash = strrchr(tmp, '/');
+            if(!last_slash || last_slash == tmp) {
+                free(tmp);
+                free(abs_src);
+                return -1;
+            }
+
+            *last_slash = '\0';
+        }
+        free(tmp);
+    }
+
+    size_t src_len = strlen(abs_src);
+    size_t target_len = strlen(abs_target);
+
+    int res = 0;
+
+    if(target_len >= src_len) {
+        if(strncmp(abs_target, abs_src, src_len) == 0) {
+            if(target_len == src_len || abs_target[src_len] == '/') {
+                res = 1;
+            }
+        }
+    }
+
+    free(abs_src);
+    free(abs_target);
+    return res;
+}
+

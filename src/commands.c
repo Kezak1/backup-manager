@@ -1,5 +1,3 @@
-#include <asm-generic/errno.h>
-#include <linux/limits.h>
 #define _GNU_SOURCE
 
 #include "utils.h"
@@ -9,7 +7,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <signal.h>
+// #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -66,42 +64,69 @@ void copy_symlink(const char* src, const char* target, const char* abs_src, cons
 
     size_t abslen = strlen(abs_src);
 
-    int rewrite = 0;
-    char new_path[PATH_MAX];
-    
     if(path[0] == '/') {
         if(strncmp(path, abs_src, abslen) == 0) {
-            if(abs_src[abslen - 1] == '/' || path[abslen] == '\0' || path[abslen] == '/') {
-                rewrite = 1;
+            if(path[abslen] == '\0' || path[abslen] == '/') {
+                char new_path[PATH_MAX];
 
                 int s = snprintf(new_path, sizeof(new_path), "%s%s", abs_target, path + abslen);
-                if(s >= PATH_MAX) {
-                    ERR("symlink name too long");
+                if(s >= (int)sizeof(new_path)) {
+                    fprintf(stderr, "[ERROR] symlink path too long\n");
+                    return;
                 }
                 if(s < 0) {
                     ERR("snprintf");
                 }
+
+                (void)unlink;
+
+                if(symlink(new_path, target) == -1) {
+                    ERR("symlink");
+                } 
+
+                return;
             }
         }
     }
 
     (void)unlink(target);
-
-    if(rewrite) {
-        if(symlink(new_path, target) == -1) {
-            ERR("symlink");
-        }
-    } else {
-        if(symlink(path, target) == -1) {
-            ERR("symlink");
-        }
-    }    
+    if(symlink(path, target) == -1) {
+        ERR("symlink");
+    }
 }
 
-// void dfs() {
-//     ;
-// }
+void dfs() {
+    ;
+}
 
-void cmd_add(char** strs) {
-    
+void cmd_add(char** strs, int count) {
+    char* src = strs[1];
+
+    if(!is_source_valid(src)) {
+        fprintf(stderr, "[ERROR] source is not valid directory\n");
+        return;
+    }
+
+    for(int i = 2; i < count; i++) {
+        char* target = strs[i];
+
+        int check = is_target_in_source(src, target);
+        if(check == -1) {
+            fprintf(stderr, "[ERROR] cant resolve the target path\n");
+            return;
+        }
+        if(check == 1) {
+            fprintf(stderr, "[ERROR] target %s is inside source %s\n", target, src);
+            return;
+        }
+
+        if(path_exist(target)) {
+            if(!is_dir_empty(target)) {
+                fprintf(stderr, "[ERROR] target directory %s is not empty\n", target);
+                return;
+            }
+        }
+    }
+
+    printf("LOL ADD\n");
 }

@@ -1,3 +1,3 @@
 #pragma once
 
-void cmd_add();
+void cmd_add(char** strs, int count);
