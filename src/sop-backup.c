@@ -2,7 +2,7 @@
 
 #include "utils.h"
 
-// #include <errno.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,21 +12,23 @@
 #include <signal.h>
 
 #define ERR(source) \
-    (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), kill(0, SIGKILL), exit(EXIT_FAILURE))
+    (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), exit(EXIT_FAILURE))
+
+volatile sig_atomic_t sig_exit = 0;
 
 void set_handler(void (*f)(int), int sig_num) {
     struct sigaction act;
-    memset(&act, 0, sizeof(struct sigaction));
+    memset(&act, 0, sizeof(act));
     act.sa_handler = f;
+    sigemptyset(&act.sa_mask);
 
-    if(-1 == sigaction(sig_num, &act, NULL)) {
+    if (sigaction(sig_num, &act, NULL) == -1) {
+        if (errno == EINVAL) return;
         ERR("sigaction");
     }
 }
-
-void sig_exit_handler(int sig_num) {
-    printf("\n");
-    _exit(EXIT_SUCCESS);
+void cleanup_handler(int sig_num) {
+    sig_exit = 1;
 }
 
 void usage() {
@@ -35,10 +37,10 @@ void usage() {
 
 int main(void) {
     for(int sig_num = 1; sig_num < NSIG; sig_num++) {
-        if(sig_num == SIGKILL || sig_num == SIGSTOP) continue;
+        if (sig_num == SIGKILL || sig_num == SIGSTOP || sig_num == SIGCHLD) continue;
         
         if(sig_num == SIGINT || sig_num == SIGTERM) {
-            set_handler(sig_exit_handler, sig_num);
+            set_handler(cleanup_handler, sig_num);
         } else {
             set_handler(SIG_IGN, sig_num);
         }
@@ -54,7 +56,7 @@ int main(void) {
         char** strs;
         int cnt_str = 0;
         if(getline(&line, &len, stdin) == -1) {
-            free_strings(strs, cnt_str);
+            free(line);
             break;
         };
 
@@ -63,29 +65,34 @@ int main(void) {
             line[l - 1] = '\0';
         }
         strs = split_string(line, &cnt_str);
+        printf("%d\n", cnt_str);
         
         if(cnt_str == 1) {
             if(strcmp(strs[0], "exit") == 0) {
-                free(line);
-                free_strings(strs, cnt_str);
-                exit(EXIT_SUCCESS);
+                cleanup_handler(0);
             } else {
                 usage();
             }
-        } else if(cnt_str == 3) {
+        }
+        else if(cnt_str > 2) {;
             if(strcmp(strs[0], "add") == 0) {
                 
             }
-            // for(int i = 0; i < cnt_str; i++) {
-            //     printf("%s ", strs[i]);
-            // }
-            // printf("\n");
-        } else {
+            for(int i = 0; i < cnt_str; i++) {
+                printf("%s ", strs[i]);
+            }
+            printf("\n");
+        } 
+        else {
             usage();
         }
         
         free(line);
         free_strings(strs, cnt_str);
+
+        if(sig_exit) {
+            break;
+        }
     }
     return EXIT_SUCCESS;
 }

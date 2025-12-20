@@ -13,35 +13,65 @@
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
+#include <ctype.h>
 
 #define ERR(source) \
     (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), kill(0, SIGKILL), exit(EXIT_FAILURE))
 
-char** split_string(const char* const input_string, int* count)
+char** split_string(const char* input_string, int* count)
 {
     char* input_copy = strdup(input_string);
     if (!input_copy)
         ERR("strdup");
-    char* temp_output[256];
-    *count = 0;
-    char* token = strtok(input_copy, " ");
-    while (token != NULL)
-    {
-        temp_output[(*count)++] = strdup(token);
-        if (*count >= 256)
-        {
-            fprintf(stderr, "Too many components of the path (>256)! Aborting\n");
-            exit(EXIT_FAILURE);
-        }
-        token = strtok(NULL, " ");
-    }
 
-    char** output_strings = malloc(sizeof(char*) * (*count));
-    if (!output_strings)
-        ERR("malloc");
-    for (int i = 0; i < *count; i++)
-    {
-        output_strings[i] = temp_output[i];
+    char** output_strings = NULL;
+    *count = 0;
+    int cap = 0;
+
+    char *p = input_copy;
+    while(*p) {
+        while(isspace((unsigned char)*p)) p++;
+        if(!*p) break;
+
+        int in_quotes = 0;
+        char *start = p, *end = p;
+
+        while(*p) {
+            if(*p == '\\' && p[1] != '\0') {
+                p++;
+                *end++ = *p++; 
+                continue;
+            }
+
+            if(*p == '"') {
+                in_quotes = 1 - in_quotes;
+                p++;
+                continue;
+            }
+            if(in_quotes == 0 && isspace((unsigned char)*p)) break;
+            
+            *end++ = *p++;
+        }
+        int had_delim = (*p != '\0');
+        *end = '\0';
+
+        if(*count == cap) {
+            if(cap) {
+                cap *= 2;
+            } else {
+                cap = 4;
+            }
+            output_strings = realloc(output_strings, cap * sizeof(char *));
+            if(!output_strings) ERR("realloc");
+        }
+
+        output_strings[*count] = strdup(start);
+        if(!output_strings[*count]) {
+            ERR("strdup");
+        }
+        
+        (*count)++;
+        if (had_delim) p++; 
     }
 
     free(input_copy);
@@ -67,7 +97,7 @@ ssize_t bulk_read(int fd, char *buf, size_t count)
         if (c < 0)
             return c;
         if (c == 0)
-            return len;  // EOF
+            return len;
         buf += c;
         len += c;
         count -= c;
@@ -91,34 +121,79 @@ ssize_t bulk_write(int fd, char *buf, size_t count)
     return len;
 }
 
-// void checked_mkdir(char* path) {
-//     if(mkdir(path, 0755) != 0) {
-//         if(errno != EEXIST) {
-//             ERR("mkdir");
-//         }
+int path_exist(const char *path) {
+    struct stat st;
+    return lstat(path, &st) == 0;
+}
 
-//         struct stat s;
-//         if(stat(path, &s)) {
-//             ERR("stat");
-//         }
-//         if(S_ISDIR(s.st_mode)) {
-//             printf("%s is not a valid dir, lol\n", path);
-//             exit(EXIT_SUCCESS);
-//         }
-//     }
-// }
+int is_source_valid(const char* path) {
+    struct stat st;
+    if(lstat(path, &st) != 0) {
+        return 0;
+    }
+    return S_ISDIR(st.st_mode);
+}
 
-// void path_path(char* path) {
-//     char* tmp = strdup(path);
-//     if(!tmp) {
-//         ERR("strdup");
-//     }
-//     for(char *p = tmp + 1; *p; p++) {
-//         if(*p == '/') {
-//             *p = '\0';
-//             checked_mkdir(tmp);
-//             *p = '/';
-//         }
-//     }
-// }
+int is_dir_empty(const char* path) {
+    DIR* dir = opendir(path);
+    if(!dir) {
+        return 0;
+    }
+
+    struct dirent *dp;
+    errno = 0;
+
+    while((dp = readdir(dir)) != NULL) {
+        if(strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) {
+            continue;
+        }
+        
+        if(closedir(dir)) {
+            ERR("closedir");
+        }
+        return 0;
+    }
+
+    if(errno != 0) {
+        ERR("readdir");
+    }
+    if(closedir(dir)) {
+        ERR("closedir");
+    }   
+    return 1;
+}
+
+void checked_mkdir(char* path) {
+    if(mkdir(path, 0755) != 0) {
+        if(errno != EEXIST) {
+            ERR("mkdir");
+        }
+
+        struct stat s;
+        if(stat(path, &s)) {
+            ERR("stat");
+        }
+        if(!S_ISDIR(s.st_mode)) {
+            fprintf(stderr, "%s exists but is not a dir\n", path);
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
+void path_path(char* path) {
+    char* tmp = strdup(path);
+    if(!tmp) {
+        ERR("strdup");
+    }
+    for(char *p = tmp + 1; *p; p++) {
+        if(*p == '/') {
+            *p = '\0';
+            checked_mkdir(tmp);
+            *p = '/';
+        }
+    }
+
+    checked_mkdir(tmp);
+    free(tmp);
+}
 

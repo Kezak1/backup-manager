@@ -1,3 +1,5 @@
+#include <asm-generic/errno.h>
+#include <linux/limits.h>
 #define _GNU_SOURCE
 
 #include "utils.h"
@@ -9,11 +11,12 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define FILE_BUF_LEN 256
 
 #define ERR(source) \
-    (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), kill(0, SIGKILL), exit(EXIT_FAILURE))
+    (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), exit(EXIT_FAILURE))
 
 void copy_file(const char* src, const char* target) {
     int fd_src = open(src, O_RDONLY);
@@ -53,14 +56,52 @@ void copy_file(const char* src, const char* target) {
     }
 }
 
-void copy_symlink(const char* stc, const char* target) {
+void copy_symlink(const char* src, const char* target, const char* abs_src, const char* abs_target) {
+    char path[PATH_MAX];
+    ssize_t len = readlink(src, path, sizeof(path) - 1);    
+    if(len == -1) {
+        ERR("readlink");
+    }
+    path[len] = '\0';
+
+    size_t abslen = strlen(abs_src);
+
+    int rewrite = 0;
+    char new_path[PATH_MAX];
     
+    if(path[0] == '/') {
+        if(strncmp(path, abs_src, abslen) == 0) {
+            if(abs_src[abslen - 1] == '/' || path[abslen] == '\0' || path[abslen] == '/') {
+                rewrite = 1;
+
+                int s = snprintf(new_path, sizeof(new_path), "%s%s", abs_target, path + abslen);
+                if(s >= PATH_MAX) {
+                    ERR("symlink name too long");
+                }
+                if(s < 0) {
+                    ERR("snprintf");
+                }
+            }
+        }
+    }
+
+    (void)unlink(target);
+
+    if(rewrite) {
+        if(symlink(new_path, target) == -1) {
+            ERR("symlink");
+        }
+    } else {
+        if(symlink(path, target) == -1) {
+            ERR("symlink");
+        }
+    }    
 }
 
-void dfs() {
+// void dfs() {
+//     ;
+// }
 
-}
-
-void add() {
+void cmd_add(char** strs) {
     
 }
