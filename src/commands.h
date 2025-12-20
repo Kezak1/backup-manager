@@ -1,18 +1,18 @@
 #pragma once
 #include <sys/types.h>
 
-#define MAX_BACKUP 1000
-#define MAX_TARGETS 1000
+#define MAX_BACKUP 16
+#define MAX_TARGETS 16
 
 typedef struct {
-    char* src;
-    char* targets[MAX_TARGETS];
+    char* source;
+    char* targets[MAX_BACKUP];
     pid_t children_pids[MAX_TARGETS];
     int count;
 } Backup;
 
 typedef struct {
-    Backup backups[MAX_BACKUP];
+    Backup backups[MAX_TARGETS];
     int count;
 } Backups;
 

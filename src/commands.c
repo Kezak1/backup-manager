@@ -79,7 +79,7 @@ void copy_symlink(const char* src, const char* target, const char* abs_src, cons
                     ERR("snprintf");
                 }
 
-                (void)unlink;
+                (void)unlink(target);
 
                 if(symlink(new_path, target) == -1) {
                     ERR("symlink");
@@ -97,7 +97,7 @@ void copy_symlink(const char* src, const char* target, const char* abs_src, cons
 }
 
 int find_backup(Backup *b, int n, const char* src, const char* target) {
-    for(int i = 0; i < n; i++) if(strcmp(b[i].src, src) == 0) {
+    for(int i = 0; i < n; i++) if(strcmp(b[i].source, src) == 0) {
         for(int j = 0; j < b[i].count; j++) if(strcmp(b[i].targets[j], target) == 0) {
             return 1;
         }
@@ -122,9 +122,9 @@ void clean_up_chidren(Backup* b) {
         }
     }
 
-    free(b->src);
+    free(b->source);
     for(int i = 0; i < n; i++) {
-        free(b->targets);
+        free(b->targets[i]);
     }
     b->count = 0;
 }
@@ -137,9 +137,6 @@ void clean_up_all(Backups *state) {
     state->count = 0;
 }
 
-
-void child_work();
-
 void dfs(const char* src, const char* target, const char* abs_src, const char* abs_target) {
     DIR* dir = opendir(src);
     if(!dir) {
@@ -148,14 +145,17 @@ void dfs(const char* src, const char* target, const char* abs_src, const char* a
 
     struct dirent *dp;
     while((dp = readdir(dir)) != NULL) {
-        if(strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..")) {
+        if(strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) {
             continue;
         }
 
         char src_path[PATH_MAX], target_path[PATH_MAX];
 
-        snprintf(src_path, sizeof(src_path), "%s/%s", src, dp->d_name);
-        snprintf(src_path, sizeof(src_path), "%s/%s", target, dp->d_name);
+        int s1 = snprintf(src_path, sizeof(src_path), "%s/%s", src, dp->d_name);
+        int s2 = snprintf(target_path, sizeof(target_path), "%s/%s", target, dp->d_name);
+
+        if(s1 < 0 || s1 >= (int)sizeof(src_path)) ERR("snprintf src_path");
+        if(s2 < 0 || s2 >= (int)sizeof(target_path)) ERR("snprintf target_path");
 
         struct stat st;
         if(lstat(src_path, &st) == -1) {
@@ -182,12 +182,23 @@ void dfs(const char* src, const char* target, const char* abs_src, const char* a
     }
 }
 
+void child_work(const char* abs_src, const char* abs_target) {
+    if(!abs_src || !abs_target) {
+        ERR("get_realpath");
+    }
+    printf("[PID: %d] starting copy from %s to %s\n", getpid(), abs_src, abs_target);
+    dfs(abs_src, abs_target, abs_src, abs_target);
+    printf("[PID: %d] done copy\n", getpid());
+    exit(EXIT_SUCCESS);
+}
+
 void cmd_add(char** strs, int count, Backups *state) {
     char* src = strs[1];
     int n = count - 2;
 
     if(n > MAX_TARGETS) {
         fprintf(stderr, "[ERROR] too many targets, %d is max\n", MAX_TARGETS);
+        return;
     }
 
     if(!is_source_valid(src)) {
@@ -203,9 +214,26 @@ void cmd_add(char** strs, int count, Backups *state) {
 
     char* t[MAX_TARGETS];
 
-    int valid = 1;
-    for(int i = 2; i < count && valid; i++) {
-        char* target = strs[i];
+    int valid = 1, allocated = 0;
+    for(int i = 0; i < n && valid; i++) {
+        char* target = strs[i + 2];
+
+        if(path_exist(target)) {
+            if(!is_dir_empty(target)) {
+                fprintf(stderr, "[ERROR] target directory %s is not empty\n", target);
+                valid = 0;
+                break;
+            }
+        } else {
+            path_path(target);
+        }
+
+        t[i] = get_realpath(target);
+        if(!t[i]) {
+            ERR("get_realpath");
+        }
+
+        allocated = i + 1;
 
         int check = is_target_in_source(src, target);
         if(check == -1) {
@@ -219,22 +247,6 @@ void cmd_add(char** strs, int count, Backups *state) {
             break;
         }
 
-        if(path_exist(target)) {
-            if(!is_dir_empty(target)) {
-                fprintf(stderr, "[ERROR] target directory %s is not empty\n", target);
-                valid = 0;
-                break;
-            }
-            t[i] = get_realpath(target);
-        } else {
-            path_path(target);
-            t[i] = get_realpath(target);
-        }
-
-        if(!t[i]) {
-            ERR("get_realpath");
-        }
-
         if(find_backup(state->backups, state->count, abs_src, t[i])) {
             fprintf(stderr, "[ERROR] backup from %s to %s already exists\n", abs_src, t[i]);
             valid = 0;
@@ -244,7 +256,7 @@ void cmd_add(char** strs, int count, Backups *state) {
 
     if(valid == 0) {
         free(abs_src) ;
-        for(int i = 0; i < n; i++) {
+        for(int i = 0; i < allocated; i++) {
             free(t[i]);
         }
 
@@ -261,7 +273,7 @@ void cmd_add(char** strs, int count, Backups *state) {
     }
 
     Backup *b = &state->backups[state->count];
-    b->src = abs_src;
+    b->source = abs_src;
     b->count = n;
     for(int i = 0; i < n; i++) {
         b->targets[i] = t[i];
@@ -274,16 +286,17 @@ void cmd_add(char** strs, int count, Backups *state) {
         }
 
         if(pid == 0) {
-            child_work();
+            child_work(abs_src, b->targets[i]);
             exit(EXIT_SUCCESS);
         }
 
         b->children_pids[i] = pid;
-        printf("[INFO] Started backup of %s for target %s (pid: %d)\n", abs_src, b->targets[i], pid);
+        printf("[INFO] started backup of %s for target %s (pid: %d)\n", abs_src, b->targets[i], pid);
     }
 
     state->count++;
-    printf("[SUCESS] Backup created, number of targets - %d\n", n);
+    printf("[INFO] backup created, number of targets: %d\n", n);
+    exit(EXIT_SUCCESS);
 }   
 
 

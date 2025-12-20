@@ -11,12 +11,11 @@
 #include <sys/stat.h>
 #include <sys/uio.h>
 #include <unistd.h>
-#include <signal.h>
 #include <errno.h>
 #include <ctype.h>
 
 #define ERR(source) \
-    (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), kill(0, SIGKILL), exit(EXIT_FAILURE))
+    (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), exit(EXIT_FAILURE))
 
 char** split_string(const char* input_string, int* count)
 {
@@ -227,12 +226,22 @@ int is_target_in_source(const char* src, const char* target) {
             }
 
             char* last_slash = strrchr(tmp, '/');
-            if(!last_slash || last_slash == tmp) {
+            if(!last_slash) {
                 free(tmp);
                 free(abs_src);
                 return -1;
             }
+            if(last_slash == tmp) { 
+                tmp[1] = '\0';
+                abs_target = realpath(tmp, NULL);
+                if(abs_target) {
+                    break;
+                }
 
+                free(tmp);
+                free(abs_src);
+                return -1;
+            }
             *last_slash = '\0';
         }
         free(tmp);

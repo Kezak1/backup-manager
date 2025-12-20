@@ -39,6 +39,7 @@ void usage() {
     printf("- restore source from target: restore <source path> <target path>\n");
     printf("- listing currect added backups: list\n");
     printf("- exiting the program: exit\n\n");
+    printf("ello\n");
 }
 
 int main(void) {
@@ -52,10 +53,9 @@ int main(void) {
         }
     }
 
-    Backups state = {
-        .backups = NULL,
-        .count = 0,
-    };
+    Backups state;
+    state.count = 0;
+    
 
     printf("Welcome to the backup management system!\n\n");
     
@@ -89,6 +89,8 @@ int main(void) {
                 free(line);
                 free_strings(strs, cnt);
                 clean_up_all(&state);
+                break;
+
             } else if(strcmp(strs[0], "list") == 0) {
                 cmd_list(&state);
             } else {

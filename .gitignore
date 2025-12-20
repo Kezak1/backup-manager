@@ -2,3 +2,4 @@
 sop-backup
 *.o
 .idea/
+backup*/
