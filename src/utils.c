@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "utils.h"
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <ftw.h>
