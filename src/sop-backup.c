@@ -1,3 +1,4 @@
+#include <asm-generic/errno-base.h>
 #define _GNU_SOURCE
 
 #include "utils.h"
@@ -28,6 +29,7 @@ void set_handler(void (*f)(int), int sig_num) {
         ERR("sigaction");
     }
 }
+
 void exit_handler(int sig_num) {
     sig_exit = 1;
 }
@@ -39,12 +41,11 @@ void usage() {
     printf("- restore source from target: restore <source path> <target path>\n");
     printf("- listing currect added backups: list\n");
     printf("- exiting the program: exit\n\n");
-    printf("ello\n");
 }
 
 int main(void) {
     for(int sig_num = 1; sig_num < NSIG; sig_num++) {
-        if (sig_num == SIGKILL || sig_num == SIGSTOP || sig_num == SIGCHLD) continue;
+        if (sig_num == SIGKILL || sig_num == SIGSTOP) continue;
         
         if(sig_num == SIGINT || sig_num == SIGTERM) {
             set_handler(exit_handler, sig_num);
@@ -61,6 +62,7 @@ int main(void) {
     
     while(1) {
         printf("command: ");
+        fflush(stdout);
 
         char* line = NULL;
         size_t len = 0;
@@ -69,6 +71,7 @@ int main(void) {
 
         if(getline(&line, &len, stdin) == -1) {
             free(line);
+            clean_up_all(&state);
             break;
         };
 
@@ -84,6 +87,7 @@ int main(void) {
             usage();
             continue;
         }
+   
         if(cnt == 1) {
             if(strcmp(strs[0], "exit") == 0) {
                 free(line);
@@ -118,5 +122,6 @@ int main(void) {
             break;
         }
     }
+
     return EXIT_SUCCESS;
 }

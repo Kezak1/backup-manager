@@ -6,13 +6,13 @@
 
 typedef struct {
     char* source;
-    char* targets[MAX_BACKUP];
+    char* targets[MAX_TARGETS];
     pid_t children_pids[MAX_TARGETS];
     int count;
 } Backup;
 
 typedef struct {
-    Backup backups[MAX_TARGETS];
+    Backup backups[MAX_BACKUP];
     int count;
 } Backups;
 

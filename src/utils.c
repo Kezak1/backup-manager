@@ -162,54 +162,79 @@ int is_dir_empty(const char* path) {
     return 1;
 }
 
-void checked_mkdir(char* path) {
+int checked_mkdir(char* path) {
     if(mkdir(path, 0755) != 0) {
         if(errno != EEXIST) {
-            ERR("mkdir");
+            return -1;
         }
 
         struct stat s;
         if(stat(path, &s)) {
-            ERR("stat");
+            return -1;
         }
         if(!S_ISDIR(s.st_mode)) {
-            fprintf(stderr, "%s exists but is not a dir\n", path);
-            exit(EXIT_FAILURE);
+            fprintf(stderr, "[ERROR] %s exists but is not a dir\n", path);
+            return -1;
         }
     }
+
+    return 0;
 }
 
-void path_path(char* path) {
+int make_path(char* path) {
     char* tmp = strdup(path);
     if(!tmp) {
-        ERR("strdup");
+        return -1;
     }
     for(char *p = tmp + 1; *p; p++) {
         if(*p == '/') {
             *p = '\0';
-            checked_mkdir(tmp);
+            if(checked_mkdir(tmp) == -1) {
+                printf("[ERROR] failed checked_mkdir\n");
+                return -1;
+            }
             *p = '/';
         }
     }
 
-    checked_mkdir(tmp);
+    if(checked_mkdir(tmp)) {
+        printf("[ERROR] failed checked_mkdir\n");
+        return -1;
+    }
     free(tmp);
+
+    return 0;
 }
 
-char* get_realpath(const char* path) {
+char* get_abs_path(const char* path) {
     char* real = realpath(path, NULL);
-    if(!real) {
+    if(real) return real;
+
+    if(path[0] == '/') {
+        return strdup(path);
+    }
+
+    char *cwd = getcwd(NULL, 0);
+    if(!cwd) {
         return NULL;
     }
-    return real;
+
+    int n = strlen(cwd) + strlen(path) + 2;
+    char* res = malloc(n); 
+    if(!res) {
+        free(cwd);
+        return NULL;
+    }
+
+    snprintf(res, n, "%s/%s", cwd, path);
+    free(cwd);
+    
+    return res;
 }
+
 
 int is_target_in_source(const char* src, const char* target) {
     char* abs_src = realpath(src, NULL);
-    if(!abs_src) {
-        ERR("realpath");
-    }
-
     char* abs_target = realpath(target, NULL);
 
     if(!abs_target) {

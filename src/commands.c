@@ -1,5 +1,3 @@
-#include <asm-generic/errno-base.h>
-#include <linux/limits.h>
 #define _GNU_SOURCE
 
 #include "utils.h"
@@ -96,7 +94,7 @@ void copy_symlink(const char* src, const char* target, const char* abs_src, cons
     }
 }
 
-int find_backup(Backup *b, int n, const char* src, const char* target) {
+int find_target_in_source(Backup *b, int n, const char* src, const char* target) {
     for(int i = 0; i < n; i++) if(strcmp(b[i].source, src) == 0) {
         for(int j = 0; j < b[i].count; j++) if(strcmp(b[i].targets[j], target) == 0) {
             return 1;
@@ -106,12 +104,22 @@ int find_backup(Backup *b, int n, const char* src, const char* target) {
     return 0;
 }
 
+int find_backup_by_source(Backups *state, const char *abs_src) {
+    for(int i = 0; i < state->count; i++) {
+        if(strcmp(state->backups[i].source, abs_src) == 0) return i;
+    }
+
+    return -1;
+}
+
 void clean_up_chidren(Backup* b) {
     int n = b->count;
     for(int i = 0; i < n; i++) {
         if(b->children_pids[i] > 0) {
             if(kill(b->children_pids[i], SIGTERM) == -1) {
-                ERR("kill");
+                if(errno != ESRCH) {
+                    ERR("kill");
+                }
             }
         }
     }
@@ -122,9 +130,15 @@ void clean_up_chidren(Backup* b) {
         }
     }
 
-    free(b->source);
+    if(b->source) {
+        free(b->source);
+        b->source = NULL;
+    }
     for(int i = 0; i < n; i++) {
-        free(b->targets[i]);
+        if(b->targets[i]) {
+            free(b->targets[i]);
+            b->targets[i] = NULL;
+        }
     }
     b->count = 0;
 }
@@ -184,12 +198,9 @@ void dfs(const char* src, const char* target, const char* abs_src, const char* a
 
 void child_work(const char* abs_src, const char* abs_target) {
     if(!abs_src || !abs_target) {
-        ERR("get_realpath");
+        ERR("realpath");
     }
-    printf("[PID: %d] starting copy from %s to %s\n", getpid(), abs_src, abs_target);
     dfs(abs_src, abs_target, abs_src, abs_target);
-    printf("[PID: %d] done copy\n", getpid());
-    exit(EXIT_SUCCESS);
 }
 
 void cmd_add(char** strs, int count, Backups *state) {
@@ -206,97 +217,168 @@ void cmd_add(char** strs, int count, Backups *state) {
         return;
     }
 
-    char* abs_src = get_realpath(src);
-    if(!abs_src) {
-        ERR("get_realpath");
-        return;
-    }
+    char* abs_src = realpath(src, NULL);
 
     char* t[MAX_TARGETS];
+    char f[MAX_TARGETS] = {0}; // 0 - empty, C - to create, A - allocated 
 
-    int valid = 1, allocated = 0;
+    int valid = 1;
     for(int i = 0; i < n && valid; i++) {
-        char* target = strs[i + 2];
-
-        if(path_exist(target)) {
-            if(!is_dir_empty(target)) {
-                fprintf(stderr, "[ERROR] target directory %s is not empty\n", target);
-                valid = 0;
-                break;
-            }
-        } else {
-            path_path(target);
+        char* abs_target = get_abs_path(strs[i + 2]);
+        if(!abs_target) {
+            free(abs_target);
+            free(abs_src);
+            ERR("get_abs_path");
         }
 
-        t[i] = get_realpath(target);
-        if(!t[i]) {
-            ERR("get_realpath");
-        }
-
-        allocated = i + 1;
-
-        int check = is_target_in_source(src, target);
+        int check = is_target_in_source(src, abs_target);
         if(check == -1) {
             fprintf(stderr, "[ERROR] cant resolve the target path\n");
+            free(abs_target);
             valid = 0;
             break;
         }
         if(check == 1) {
-            fprintf(stderr, "[ERROR] target %s is inside source %s\n", target, src);
+            fprintf(stderr, "[ERROR] target %s is inside source %s\n", abs_target, src);
+            free(abs_target);
             valid = 0;
             break;
         }
 
-        if(find_backup(state->backups, state->count, abs_src, t[i])) {
-            fprintf(stderr, "[ERROR] backup from %s to %s already exists\n", abs_src, t[i]);
+        if(path_exist(abs_target)) {
+            if(!is_dir_empty(abs_target)) {
+                fprintf(stderr, "[ERROR] target directory %s is not empty\n", abs_target);
+                free(abs_target);
+                valid = 0;
+                break;
+            }
+        } else {
+            f[i] = 'C';   
+        }
+
+        free(abs_target);
+    }
+    
+    if(valid == 0) {
+        free(abs_src);
+        return;
+    }
+
+    for(int i = 0; i < n && valid; i++) {
+        char* abs_target = get_abs_path(strs[i + 2]);
+        if(!abs_target) {
+            free(abs_target);
+            free(abs_src);
+            ERR("get_abs_path");
+        }
+        if(f[i] == 'C') {
+            if(make_path(strs[i + 2]) == -1) {
+                free(abs_target);
+                free(abs_src);
+                ERR("make_path");   
+            }
+        }
+
+        t[i] = realpath(abs_target, NULL);
+        f[i] = 'A';
+        free(abs_target);
+        
+        if(!t[i]) {
             valid = 0;
             break;
+        }
+
+        if(find_target_in_source(state->backups, state->count, abs_src, t[i])){
+            fprintf(stderr, "[ERROR] target %s already exists for %s\n", t[i], abs_src);
+            valid = 0;
+            break;
+        }
+
+        for(int j = 0; j < i; j++) {
+            if(strcmp(t[i], t[j]) == 0) {
+                fprintf(stderr, "[ERROR] there is dublicate in input targets\n");
+                valid = 0;
+                break;
+            }
         }
     }
 
     if(valid == 0) {
         free(abs_src) ;
-        for(int i = 0; i < allocated; i++) {
-            free(t[i]);
+        for(int i = 0; i < n; i++) {
+            if(f[i] == 'A')
+                free(t[i]);
         }
 
         return;
     }
 
-    if(state->count >= MAX_BACKUP) {
-        fprintf(stderr,"[ERROR] maximum number of backups has reached %d\n", MAX_BACKUP);
+    int idx = find_backup_by_source(state, abs_src);
+    Backup *b = NULL;
+    int is_new = 0;
+
+    if(idx >= 0) {
+        b = &state->backups[idx];
         free(abs_src);
+        abs_src = b->source;
+    } else {
+        if(state->count >= MAX_BACKUP) {
+            fprintf(stderr,"[ERROR] maximum number of backups has reached %d\n", MAX_BACKUP);
+            free(abs_src);
+            for(int i = 0; i < n; i++) {
+                free(t[i]);
+            }
+            return;
+        }
+
+        b = &state->backups[state->count++];
+        is_new = 1;
+        b->source = abs_src;
+        b->count = 0;
+
+        for(int i = 0; i < n; i++) {
+            b->children_pids[i] = -1;
+        }
+    }
+
+    int start = b->count;
+    if(b->count + n > MAX_TARGETS) {
+        fprintf(stderr, "[ERROR] too many target directories (max %d)\n", MAX_TARGETS);
         for(int i = 0; i < n; i++) {
             free(t[i]);
         }
+
+        if (is_new) {
+            free(b->source);
+            b->source = NULL;
+            b->count = 0;
+        }
+        
         return;
     }
-
-    Backup *b = &state->backups[state->count];
-    b->source = abs_src;
-    b->count = n;
+    
     for(int i = 0; i < n; i++) {
-        b->targets[i] = t[i];
+        b->targets[b->count + i] = t[i];
     }
+    b->count += n;
 
     pid_t pid;
     for(int i = 0; i < n; i++) {
+        int ti = start + i;
         if((pid = fork()) == -1) {
             ERR("fork");
         }
 
         if(pid == 0) {
-            child_work(abs_src, b->targets[i]);
+            child_work(abs_src, b->targets[ti]);
             exit(EXIT_SUCCESS);
         }
 
-        b->children_pids[i] = pid;
-        printf("[INFO] started backup of %s for target %s (pid: %d)\n", abs_src, b->targets[i], pid);
+        b->children_pids[ti] = pid;
+        printf("[PID: %d] started backup of %s for target %s\n", pid, abs_src, b->targets[ti]);
     }
 
-    state->count++;
     printf("[INFO] backup created, number of targets: %d\n", n);
-    exit(EXIT_SUCCESS);
 }   
 
 
