@@ -4,7 +4,6 @@
 #include "utils.h"
 #include "commands.h"
 
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,19 +17,8 @@
 
 volatile sig_atomic_t sig_exit = 0;
 
-void set_handler(void (*f)(int), int sig_num) {
-    struct sigaction act;
-    memset(&act, 0, sizeof(act));
-    act.sa_handler = f;
-    sigemptyset(&act.sa_mask);
-
-    if (sigaction(sig_num, &act, NULL) == -1) {
-        if (errno == EINVAL) return;
-        ERR("sigaction");
-    }
-}
-
 void exit_handler(int sig_num) {
+    puts(NULL);
     sig_exit = 1;
 }
 

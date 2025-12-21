@@ -1,6 +1,7 @@
 #pragma once
 #include <sys/types.h>
 
+void set_handler(void (*f)(int), int sig_num);
 char** split_string(const char* input_string, int* count);
 void free_strings(char** strings, int count);
 ssize_t bulk_read(int fd, char *buf, size_t count);
@@ -10,7 +11,7 @@ int path_exist(const char *path);
 int is_source_valid(const char* path);
 int is_dir_empty(const char* path);
 int is_target_in_source(const char* source, const char* target);
-int checked_mkdir(char* path);
-int make_path(char* path);
-
+int checked_mkdir(const char* path);
+int make_path(const char* path);
+void ms_sleep(unsigned int milli);
 

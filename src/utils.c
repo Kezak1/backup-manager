@@ -13,9 +13,23 @@
 #include <unistd.h>
 #include <errno.h>
 #include <ctype.h>
+#include <time.h>
+#include <signal.h>
 
 #define ERR(source) \
     (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), exit(EXIT_FAILURE))
+
+void set_handler(void (*f)(int), int sig_num) {
+    struct sigaction act;
+    memset(&act, 0, sizeof(act));
+    act.sa_handler = f;
+    sigemptyset(&act.sa_mask);
+
+    if (sigaction(sig_num, &act, NULL) == -1) {
+        if (errno == EINVAL) return;
+        ERR("sigaction");
+    }
+}
 
 char** split_string(const char* input_string, int* count)
 {
@@ -122,12 +136,12 @@ ssize_t bulk_write(int fd, char *buf, size_t count)
 
 int path_exist(const char *path) {
     struct stat st;
-    return lstat(path, &st) == 0;
+    return stat(path, &st) == 0;
 }
 
 int is_source_valid(const char* path) {
     struct stat st;
-    if(lstat(path, &st) != 0) {
+    if(stat(path, &st) != 0) {
         return 0;
     }
     return S_ISDIR(st.st_mode);
@@ -162,7 +176,7 @@ int is_dir_empty(const char* path) {
     return 1;
 }
 
-int checked_mkdir(char* path) {
+int checked_mkdir(const char* path) {
     if(mkdir(path, 0755) != 0) {
         if(errno != EEXIST) {
             return -1;
@@ -181,7 +195,7 @@ int checked_mkdir(char* path) {
     return 0;
 }
 
-int make_path(char* path) {
+int make_path(const char* path) {
     char* tmp = strdup(path);
     if(!tmp) {
         return -1;
@@ -288,5 +302,16 @@ int is_target_in_source(const char* src, const char* target) {
     free(abs_src);
     free(abs_target);
     return res;
+}
+
+void ms_sleep(unsigned int milli)
+{
+    time_t sec = (int)(milli / 1000);
+    milli = milli - (sec * 1000);
+    struct timespec ts = {0};
+    ts.tv_sec = sec;
+    ts.tv_nsec = milli * 1000000L;
+    if (TEMP_FAILURE_RETRY(nanosleep(&ts, &ts)))
+        ERR("nanosleep");
 }
 

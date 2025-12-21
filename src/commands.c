@@ -1,3 +1,4 @@
+#include <asm-generic/errno.h>
 #define _GNU_SOURCE
 
 #include "utils.h"
@@ -13,11 +14,24 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <sys/inotify.h>
+#include <limits.h>
 
 #define FILE_BUF_LEN 256
-
+#define MAX_WATCHES 8192
+#define EVENT_BUF_LEN (64 * (sizeof(struct inotify_event) + NAME_MAX + 1))
 #define ERR(source) \
     (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), exit(EXIT_FAILURE))
+
+struct Watch {
+    int wd; // key
+    char *path; // value
+};
+
+struct WatchMap {
+    struct Watch watch_map[MAX_WATCHES];
+    int watch_count;
+};
 
 void copy_file(const char* src, const char* target) {
     int fd_src = open(src, O_RDONLY);
@@ -173,14 +187,13 @@ void dfs(const char* src, const char* target, const char* abs_src, const char* a
 
         struct stat st;
         if(lstat(src_path, &st) == -1) {
+            if(errno == ENOENT) continue;
             ERR("lstat");
         }
 
         if(S_ISDIR(st.st_mode)) {
-            if(mkdir(target_path, st.st_mode) == -1) {
-                if(errno != EEXIST){
-                    ERR("mkdir");
-                }
+            if(checked_mkdir(target_path) == -1) {
+                ERR("checked_mkdir");
             }
 
             dfs(src_path, target_path, abs_src, abs_target);
@@ -196,11 +209,221 @@ void dfs(const char* src, const char* target, const char* abs_src, const char* a
     }
 }
 
+void add_to_map(struct WatchMap *map, int wd, const char *path) {
+    if (map->watch_count >= MAX_WATCHES) {
+        fprintf(stderr, "[ERROR] exceeded max watches!\n");
+        return;
+    }
+    map->watch_map[map->watch_count].wd = wd;
+    map->watch_map[map->watch_count].path = strdup(path); // Must copy the path!
+    map->watch_count++;
+}
+
+struct Watch *find_watch(struct WatchMap *map, int wd) {
+    for (int i = 0; i < map->watch_count; i++) {
+        if (map->watch_map[i].wd == wd) {
+            return &map->watch_map[i];
+        }
+    }
+    return NULL;
+}
+
+void remove_from_map(struct WatchMap *map, int wd) {
+    for (int i = 0; i < map->watch_count; i++) {
+        if (map->watch_map[i].wd == wd) {
+            free(map->watch_map[i].path);
+            map->watch_map[i] = map->watch_map[map->watch_count - 1];
+            map->watch_count--;
+            return;
+        }
+    }
+}
+
+void add_watch_recursive(int notify_fd, struct WatchMap *map, const char *base_path) {
+    uint32_t mask = IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO |
+                    IN_ATTRIB | IN_CLOSE_WRITE | IN_DELETE_SELF | IN_MOVE_SELF;
+
+    int wd = inotify_add_watch(notify_fd, base_path, mask);
+    if (wd < 0) {
+        perror("inotify_add_watch");
+        return;
+    }
+    add_to_map(map, wd, base_path);
+
+    DIR *dir = opendir(base_path);
+    if (!dir) {
+        perror("opendir");
+        return;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        char full_path[PATH_MAX];
+        snprintf(full_path, sizeof(full_path), "%s/%s", base_path, entry->d_name);
+
+        struct stat st;
+        if (lstat(full_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+            add_watch_recursive(notify_fd, map, full_path);
+        }
+    }
+
+    closedir(dir);
+}
+
+void update_watch_paths(struct WatchMap *map, const char *old_path, const char *new_path) {
+    size_t old_len = strlen(old_path);
+
+    for (int i = 0; i < map->watch_count; i++) {
+        if (strncmp(map->watch_map[i].path, old_path, old_len) == 0 && (
+                map->watch_map[i].path[old_len] == '/' || map->watch_map[i].path[old_len] == '\0')) {
+            char new_full_path[PATH_MAX];
+            snprintf(new_full_path, sizeof(new_full_path), "%s%s",
+                     new_path, map->watch_map[i].path + old_len);
+
+            free(map->watch_map[i].path);
+            map->watch_map[i].path = strdup(new_full_path);
+        }
+    }
+}
+
+void map_to_target(const char* src, const char* abs_src, const char* abs_target, char* out, int out_size) {
+    int src_len = strlen(abs_src);
+    if(strncmp(src, abs_src, src_len) != 0) {
+        out[0] = '\0';
+        return;
+    }
+    snprintf(out, out_size, "%s%s", abs_target, src + src_len);
+}
+
+void mirror_create_or_update(const char* src, const char* target, const char* abs_src, const char* abs_target)  {
+    struct stat st;
+    if(lstat(src, &st) == -1) {
+        ERR("lstat");
+    }
+
+    if(S_ISDIR(st.st_mode)) {
+        if(checked_mkdir((char*)target) == -1) {
+            ERR("checked_mkdir");
+        }
+    } else if(S_ISLNK(st.st_mode)) {
+        copy_symlink(src, target, abs_src, abs_target);
+    } else if(S_ISREG(st.st_mode)) {
+        copy_file(src, target);
+    }
+}
+
+void mirror_remove(const char* target) {
+    struct stat st;
+    if(lstat(target, &st) == -1) {
+        if(errno != ENOENT) {
+            ERR("lstat");
+        }
+        return;
+    }
+
+    if(S_ISDIR(st.st_mode)) {
+        if(rmdir(target) == -1 && errno != ENOTEMPTY) {
+            ERR("rmdir");
+            return;
+        }
+    } else if(S_ISLNK(st.st_mode)) {
+        unlink(target);
+    }
+}
+
+void watcher(const char* abs_src, const char* abs_target) {
+    int notify_fd = inotify_init();
+    if (notify_fd < 0) {
+        ERR("inotify_init");
+    }
+
+    struct WatchMap map = {0};
+
+    add_watch_recursive(notify_fd, &map, abs_src);
+    
+    uint32_t pending_cookie = 0;
+    char pending_move_path[PATH_MAX] = "";
+
+    while (map.watch_count > 0) {
+        char buffer[EVENT_BUF_LEN];
+        ssize_t len = read(notify_fd, buffer, EVENT_BUF_LEN);
+        if (len < 0) {
+            if(errno == EINTR) continue;
+            
+            ERR("read");
+        }
+
+        ssize_t i = 0;
+        while (i < len) {
+            struct inotify_event *event = (struct inotify_event *) &buffer[i];
+            struct Watch *watch = find_watch(&map, event->wd);
+
+            char event_path[PATH_MAX] = "";
+            if (watch && event->len > 0) {
+                snprintf(event_path, sizeof(event_path), "%s/%s", watch->path, event->name);
+            } else if (watch) {
+                strncpy(event_path, watch->path, sizeof(event_path));
+            }
+
+            if (event->mask & IN_IGNORED) {
+                remove_from_map(&map, event->wd);
+            } else if ((event->mask & (IN_DELETE_SELF | IN_MOVE_SELF)) && watch && strcmp(watch->path, abs_src) == 0) {
+                close(notify_fd);
+                return;
+            } else {
+                char target_path[PATH_MAX] = "";
+                map_to_target(event_path, abs_src, abs_target, target_path, sizeof(target_path));
+
+                if(event->mask & IN_ISDIR) {
+                    if (event->mask & IN_CREATE) {
+                        checked_mkdir(target_path);
+                        add_watch_recursive(notify_fd, &map, event_path);
+                    } if (event->mask & IN_DELETE) {
+                        mirror_remove(target_path);
+                    } else if (event->mask & IN_MOVED_FROM) {
+                        pending_cookie = event->cookie;
+                        strncpy(pending_move_path, event_path, sizeof(pending_move_path));
+                    } else if (event->mask & IN_MOVED_TO) {
+                        if (event->cookie == pending_cookie && pending_cookie != 0) {
+                            char old[PATH_MAX];
+                            map_to_target(pending_move_path, abs_src, abs_target, old, sizeof(old));
+                            rename(old, target_path);
+                            update_watch_paths(&map, pending_move_path, event_path);
+                            pending_cookie = 0;
+                            pending_move_path[0] = '\0';
+                        } else {
+                            checked_mkdir(target_path);
+                            add_watch_recursive(notify_fd, &map, event_path);
+                        }
+                    }
+                } else {
+                    if (event->mask & (IN_CREATE | IN_CLOSE_WRITE | IN_ATTRIB | IN_MOVED_TO)) {
+                        mirror_create_or_update(event_path, target_path, abs_src, abs_target);
+                    }
+                    if (event->mask & (IN_DELETE | IN_MOVED_FROM)) {
+                        mirror_remove(target_path);
+                    }
+                }
+            }
+            i += sizeof(struct inotify_event) + event->len;
+        }
+        
+    }
+
+    close(notify_fd);
+}
+
 void child_work(const char* abs_src, const char* abs_target) {
     if(!abs_src || !abs_target) {
         ERR("realpath");
     }
     dfs(abs_src, abs_target, abs_src, abs_target);
+    sleep(1);
+    watcher(abs_src, abs_target);
 }
 
 void cmd_add(char** strs, int count, Backups *state) {
@@ -370,6 +593,8 @@ void cmd_add(char** strs, int count, Backups *state) {
         }
 
         if(pid == 0) {
+            set_handler(SIG_DFL, SIGINT);
+            set_handler(SIG_DFL, SIGTERM);
             child_work(abs_src, b->targets[ti]);
             exit(EXIT_SUCCESS);
         }
