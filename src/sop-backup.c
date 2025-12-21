@@ -91,7 +91,7 @@ int main(void) {
                 cmd_add(strs, cnt, &state);
             } else if(strcmp(strs[0], "end") == 0) {
                 cmd_end(strs, cnt, &state);
-            } else if(cnt strcmp(strs[0], "restore") == 0) {
+            } else if(cnt == 3 && strcmp(strs[0], "restore") == 0) {
                 cmd_restore(strs, cnt, &state);
             } else {
                 usage();
