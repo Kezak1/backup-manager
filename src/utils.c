@@ -198,6 +198,7 @@ int checked_mkdir(const char* path) {
 int make_path(const char* path) {
     char* tmp = strdup(path);
     if(!tmp) {
+        free(tmp);
         return -1;
     }
     for(char *p = tmp + 1; *p; p++) {
@@ -302,4 +303,22 @@ int is_target_in_source(const char* src, const char* target) {
     free(abs_src);
     free(abs_target);
     return res;
+}
+
+void ensure_parent_dirs(const char* path) {
+    char dir_path[PATH_MAX];
+    int s = snprintf(dir_path, sizeof(dir_path), "%s", path);
+    if(s < 0 || s >= (int)sizeof(dir_path)) {
+        ERR("snprintf ensure_parent_dirs");
+    }
+
+    char* slash = strrchr(dir_path, '/');
+    if(!slash) return;
+    if(slash == dir_path) return;
+
+    *slash = '\0';
+
+    if(make_path(dir_path) == -1) {
+        ERR("make_path");
+    }
 }

@@ -13,3 +13,4 @@ int is_dir_empty(const char* path);
 int is_target_in_source(const char* source, const char* target);
 int checked_mkdir(const char* path);
 int make_path(const char* path);
+void ensure_parent_dirs(const char* path);
