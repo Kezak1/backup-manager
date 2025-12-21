@@ -172,7 +172,7 @@ int is_dir_empty(const char* path) {
     }
     if(closedir(dir)) {
         ERR("closedir");
-    }   
+    }
     return 1;
 }
 
@@ -303,15 +303,3 @@ int is_target_in_source(const char* src, const char* target) {
     free(abs_target);
     return res;
 }
-
-void ms_sleep(unsigned int milli)
-{
-    time_t sec = (int)(milli / 1000);
-    milli = milli - (sec * 1000);
-    struct timespec ts = {0};
-    ts.tv_sec = sec;
-    ts.tv_nsec = milli * 1000000L;
-    if (TEMP_FAILURE_RETRY(nanosleep(&ts, &ts)))
-        ERR("nanosleep");
-}
-

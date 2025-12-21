@@ -1,8 +1,8 @@
 #pragma once
 #include <sys/types.h>
 
-#define MAX_BACKUP 16
-#define MAX_TARGETS 16
+#define MAX_BACKUP 100
+#define MAX_TARGETS 100
 
 typedef struct {
     char* source;

@@ -18,14 +18,14 @@
 volatile sig_atomic_t sig_exit = 0;
 
 void exit_handler(int sig_num) {
-    puts(NULL);
+    puts("");
     sig_exit = 1;
 }
 
 void usage() {
     printf("USAGE:\n");
     printf("- adding backup: add <source path> <target path 1> <target path 2> ... <target path n>, n >= 1\n");
-    printf("- ending backup: end <source path> <target path>\n");
+    printf("- ending backup: end <source path> <target path 1> <target path 2> ... <target path n>, n >= 1\n");
     printf("- restore source from target: restore <source path> <target path>\n");
     printf("- listing currect added backups: list\n");
     printf("- exiting the program: exit\n\n");
@@ -44,7 +44,6 @@ int main(void) {
 
     Backups state;
     state.count = 0;
-    
 
     printf("Welcome to the backup management system!\n\n");
     
@@ -93,7 +92,7 @@ int main(void) {
                 cmd_add(strs, cnt, &state);
             } else if(strcmp(strs[0], "end") == 0) {
                 cmd_end(strs, cnt, &state);
-            } else if(strcmp(strs[0], "restore") == 0) {
+            } else if(cnt == 3 && strcmp(strs[0], "restore") == 0) {
                 cmd_restore(strs, cnt, &state);
             } else {
                 usage();

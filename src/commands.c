@@ -1,4 +1,3 @@
-#include <asm-generic/errno.h>
 #define _GNU_SOURCE
 
 #include "utils.h"
@@ -18,6 +17,7 @@
 #include <limits.h>
 
 #define FILE_BUF_LEN 256
+#define PATH_MAX 4096
 #define MAX_WATCHES 8192
 #define EVENT_BUF_LEN (64 * (sizeof(struct inotify_event) + NAME_MAX + 1))
 #define ERR(source) \
@@ -71,7 +71,7 @@ void copy_file(const char* src, const char* target) {
     }
 }
 
-void copy_symlink(const char* src, const char* target, const char* abs_src, const char* abs_target) {
+void prep_symlink(const char* src, const char* abs_src, const char* abs_target, char *out, int out_size) {
     char path[PATH_MAX];
     ssize_t len = readlink(src, path, sizeof(path) - 1);    
     if(len == -1) {
@@ -84,28 +84,126 @@ void copy_symlink(const char* src, const char* target, const char* abs_src, cons
     if(path[0] == '/') {
         if(strncmp(path, abs_src, abslen) == 0) {
             if(path[abslen] == '\0' || path[abslen] == '/') {
-                char new_path[PATH_MAX];
-
-                int s = snprintf(new_path, sizeof(new_path), "%s%s", abs_target, path + abslen);
-                if(s < 0 || s >= (int)sizeof(new_path)) {
+                int s = snprintf(out, out_size, "%s%s", abs_target, path + abslen);
+                if(s < 0 || s >= out_size) {
                     ERR("snprintf");
                 }
-
-                (void)unlink(target);
-
-                if(symlink(new_path, target) == -1) {
-                    ERR("symlink");
-                } 
 
                 return;
             }
         }
     }
 
+    int s = snprintf(out, out_size, "%s", path);
+    if(s < 0 || s >= out_size) {
+        ERR("snprintf");
+    }
+}
+
+void copy_symlink(const char* src, const char* target, const char* abs_src, const char* abn_target) {
+    char new_path[PATH_MAX];
+    prep_symlink(src, abs_src, abn_target, new_path, sizeof(new_path));
     (void)unlink(target);
-    if(symlink(path, target) == -1) {
+    if(symlink(new_path, target) == -1) {
         ERR("symlink");
     }
+}
+
+int files_equal(const char* src, const char* target) {
+    struct stat st_src;
+    if(stat(src, &st_src) == -1) {
+        ERR("stat");
+    }
+
+    struct stat st_target;
+    if(stat(target, &st_target) == -1) {
+        if(errno == ENOENT) {
+            return 0;
+        }
+        ERR("stat");
+    }
+    if(!S_ISREG(st_src.st_mode) || !S_ISREG(st_target.st_mode)) {
+        return 0;
+    }
+    if(st_src.st_size != st_target.st_size) {
+        return 0;
+    }
+
+    int fd_src = open(src, O_RDONLY);
+    if(fd_src < 0) {
+        ERR("open");
+    }
+    int fd_target = open(target, O_RDONLY);
+    if(fd_target < 0) {
+        if(close(fd_src) < 0) {
+            ERR("close");
+        }
+        ERR("open");
+    }
+
+    char buf_src[FILE_BUF_LEN];
+    char buf_target[FILE_BUF_LEN];
+    while(1) {
+        ssize_t read_src = bulk_read(fd_src, buf_src, FILE_BUF_LEN);
+        if(read_src == -1) {
+            ERR("bulk_read");
+        }
+
+        ssize_t read_target = bulk_read(fd_target, buf_target, FILE_BUF_LEN);
+        if(read_target == -1) {
+            ERR("bulk_read");
+        }
+
+        if(read_src != read_target) {
+            if(close(fd_target) < 0 || close(fd_src) < 0) {
+                ERR("close");
+            }
+            return 0;
+        }
+
+        if(read_src == 0) {
+            break;
+        }
+
+        if(memcmp(buf_src, buf_target, read_src) != 0) {
+            if(close(fd_target) < 0 || close(fd_src) < 0) {
+                ERR("close");
+            }
+            return 0;
+        }
+    }
+
+    if(close(fd_target) < 0 || close(fd_src) < 0) {
+        ERR("close");
+    }
+
+    return 1;
+}
+
+int symlink_equal(const char* src, const char* target, const char* abs_src, const char* abs_target) {
+    struct stat st;
+    if(lstat(target, &st) == -1) {
+        if(errno == ENOENT) {
+            return 0;
+        }
+        ERR("lstat");
+    }
+
+    if(!S_ISLNK(st.st_mode)) {
+        return 0;
+    }
+
+    char path1[PATH_MAX];
+    prep_symlink(src, abs_src, abs_target, path1, sizeof(path1));
+
+    char path2[PATH_MAX];
+    ssize_t len = readlink(target, path2, sizeof(path2) - 1);
+    if(len == -1) {
+        ERR("readlink");
+    }
+    path2[len] = '\0';
+
+    return strcmp(path1, path2) == 0;
 }
 
 int find_target_in_source(Backup *b, int n, const char* src, const char* target) {
@@ -165,7 +263,106 @@ void clean_up_all(Backups *state) {
     state->count = 0;
 }
 
-void dfs(const char* src, const char* target, const char* abs_src, const char* abs_target) {
+void dfs_remove(const char* path) {
+    struct stat st;
+    if(lstat(path, &st) == -1) {
+        if(errno == ENOENT) {
+            return;
+        }
+
+        ERR("lstat");
+    }
+
+    if(S_ISDIR(st.st_mode)) {
+        DIR* dir = opendir(path);
+        if(!dir) {
+            if(errno == ENOENT) {
+                return;
+            }
+            ERR("opendir");
+        }
+
+        struct dirent *dp;
+        while((dp = readdir(dir)) != NULL) {
+            if(strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) {
+                continue;
+            }
+
+            char child_path[PATH_MAX];
+
+            int s = snprintf(child_path, sizeof(child_path), "%s/%s", path, dp->d_name);
+            if(s < 0 || s >= (int)sizeof(child_path)) {
+                ERR("snprintf child_path");
+            }
+            
+            dfs_remove(child_path);
+        }
+
+        if(closedir(dir) == -1) {
+            ERR("closedir");
+        }
+
+        if(rmdir(path) == -1 && errno != ENOENT) {
+            ERR("rmdir");
+        }
+    } else {
+        if(unlink(path) == -1 && errno != ENOENT) {
+            ERR("unlink");
+        }
+    }
+}
+
+void dfs_restore(const char* src, const char* target) {
+    DIR* dir = opendir(src);
+    if(!dir) {
+        ERR("opendir");
+    }
+
+    struct dirent *dp;
+    while((dp = readdir(dir)) != NULL) {
+        if(strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) {
+            continue;
+        }
+
+        char src_path[PATH_MAX], target_path[PATH_MAX];
+
+        int s1 = snprintf(src_path, sizeof(src_path), "%s/%s", src, dp->d_name);
+        int s2 = snprintf(target_path, sizeof(target_path), "%s/%s", target, dp->d_name);
+
+        if(s1 < 0 || s1 >= (int)sizeof(src_path)) ERR("snprintf src_path");
+        if(s2 < 0 || s2 >= (int)sizeof(target_path)) ERR("snprintf target_path");
+
+        struct stat st_src;
+        if(lstat(src_path, &st_src) == -1) {
+            if(errno == ENOENT) continue;
+            ERR("lstat");
+        }
+
+        struct stat st_target;
+        if(lstat(target_path, &st_target) == -1) {
+            if(errno == ENOENT) {
+                dfs_remove(src_path);
+                continue;
+            }
+            ERR("lstat");
+        }
+
+        if((st_src.st_mode & S_IFMT) != (st_target.st_mode & S_IFMT)) {
+            dfs_remove(src_path);
+            continue;
+        }
+
+        if(S_ISDIR(st_src.st_mode)) {
+            dfs_restore(src_path, target_path);
+        }
+    }
+
+    if(closedir(dir) == -1) {
+        ERR("closedir");
+    }
+}
+
+void dfs(const char* src, const char* target, const char* abs_src, const char* abs_target, int skip) {
     DIR* dir = opendir(src);
     if(!dir) {
         ERR("opendir");
@@ -196,11 +393,15 @@ void dfs(const char* src, const char* target, const char* abs_src, const char* a
                 ERR("checked_mkdir");
             }
 
-            dfs(src_path, target_path, abs_src, abs_target);
+            dfs(src_path, target_path, abs_src, abs_target, skip);
         } else if(S_ISLNK(st.st_mode)) {
-            copy_symlink(src_path, target_path, abs_src, abs_target);
+            if(!skip || !symlink_equal(src_path, target_path, abs_src, abs_target)) {
+                copy_symlink(src_path, target_path, abs_src, abs_target);
+            }
         } else if(S_ISREG(st.st_mode)) {
-            copy_file(src_path, target_path);
+            if(!skip || !files_equal(src_path, target_path)) {
+                copy_file(src_path, target_path);
+            }
         }
     }
 
@@ -290,13 +491,17 @@ void update_watch_paths(struct WatchMap *map, const char *old_path, const char *
     }
 }
 
-void map_to_target(const char* src, const char* abs_src, const char* abs_target, char* out, int out_size) {
+int map_to_target(const char* src, const char* abs_src, const char* abs_target, char* out, int out_size) {
     int src_len = strlen(abs_src);
     if(strncmp(src, abs_src, src_len) != 0) {
         out[0] = '\0';
-        return;
+        return 0;
     }
-    snprintf(out, out_size, "%s%s", abs_target, src + src_len);
+    int s = snprintf(out, out_size, "%s%s", abs_target, src + src_len);
+    if (s < 0 || s >= out_size) {
+        ERR("snprintf map_to_target");
+    }
+    return 1;
 }
 
 void mirror_create_or_update(const char* src, const char* target, const char* abs_src, const char* abs_target)  {
@@ -306,7 +511,7 @@ void mirror_create_or_update(const char* src, const char* target, const char* ab
     }
 
     if(S_ISDIR(st.st_mode)) {
-        if(checked_mkdir((char*)target) == -1) {
+        if(checked_mkdir(target) == -1) {
             ERR("checked_mkdir");
         }
     } else if(S_ISLNK(st.st_mode)) {
@@ -326,12 +531,11 @@ void mirror_remove(const char* target) {
     }
 
     if(S_ISDIR(st.st_mode)) {
-        if(rmdir(target) == -1 && errno != ENOTEMPTY) {
-            ERR("rmdir");
-            return;
+        dfs_remove(target);
+    } else {
+        if(unlink(target) == -1 && errno != ENOENT) {
+            ERR("unlink");
         }
-    } else if(S_ISLNK(st.st_mode)) {
-        unlink(target);
     }
 }
 
@@ -376,7 +580,9 @@ void watcher(const char* abs_src, const char* abs_target) {
                 return;
             } else {
                 char target_path[PATH_MAX] = "";
-                map_to_target(event_path, abs_src, abs_target, target_path, sizeof(target_path));
+                if(map_to_target(event_path, abs_src, abs_target, target_path, sizeof(target_path))) {
+                    
+                }
 
                 if(event->mask & IN_ISDIR) {
                     if (event->mask & IN_CREATE) {
@@ -411,7 +617,6 @@ void watcher(const char* abs_src, const char* abs_target) {
             }
             i += sizeof(struct inotify_event) + event->len;
         }
-        
     }
 
     close(notify_fd);
@@ -421,8 +626,7 @@ void child_work(const char* abs_src, const char* abs_target) {
     if(!abs_src || !abs_target) {
         ERR("realpath");
     }
-    dfs(abs_src, abs_target, abs_src, abs_target);
-    sleep(1);
+    dfs(abs_src, abs_target, abs_src, abs_target, 0);
     watcher(abs_src, abs_target);
 }
 
@@ -435,12 +639,12 @@ void cmd_add(char** strs, int count, Backups *state) {
         return;
     }
 
-    if(!is_source_valid(src)) {
+    char* abs_src = realpath(src, NULL);
+
+    if(!is_source_valid(src) || !abs_src) {
         fprintf(stderr, "[ERROR] source is not valid directory\n");
         return;
     }
-
-    char* abs_src = realpath(src, NULL);
 
     char* t[MAX_TARGETS];
     char f[MAX_TARGETS] = {0}; // 0 - empty, C - to create, A - allocated 
@@ -603,16 +807,121 @@ void cmd_add(char** strs, int count, Backups *state) {
         printf("[PID: %d] started backup of %s for target %s\n", pid, abs_src, b->targets[ti]);
     }
 
-    printf("[INFO] backup created, number of targets: %d\n", n);
+    printf("[INFO] backup created and its now watch the source, number of targets: %d\n", b->count);
 }   
 
-
 void cmd_end(char** strs, int count, Backups *state) {
-    ;
+    char* src = strs[1];
+    for(int k = 2; k < count; k++) {
+        char* target = strs[k];
+
+        char* abs_src = realpath(src, NULL);
+        if(!abs_src) {
+            fprintf(stderr, "[ERROR] given source file does not exists\n");
+            return;
+        }
+        char* abs_target = realpath(target, NULL);
+        if(!abs_target) {
+            free(abs_src);
+            fprintf(stderr, "[ERROR] given target file does not exists\n");
+            return;
+        }
+
+        int idx = find_backup_by_source(state, abs_src);
+        if(idx < 0) {
+            fprintf(stderr, "[ERROR] given source is not found in current backups\n");
+            free(abs_src);
+            free(abs_target);
+            return;
+        }
+
+        Backup *b = &state->backups[idx];
+
+        int target_idx = -1;
+        for(int i = 0; i < b->count; i++) {
+            if(strcmp(abs_target, b->targets[i]) == 0) {
+                target_idx = i;
+                break;
+            }
+        }
+
+        free(abs_src);
+        free(abs_target);
+
+        if(target_idx == -1) {
+            fprintf(stderr, "[ERROR] given target is not found in given source\n");
+            return;
+        }
+
+        if(b->children_pids[target_idx] > 0) {
+            printf("[INFO] murdering this child [PID: %d]\n", b->children_pids[target_idx]);
+            if(-1 == kill(b->children_pids[target_idx], SIGTERM)) {
+                if(errno != ESRCH) {
+                    ERR("kill");
+                }
+            }
+
+            waitpid(b->children_pids[target_idx], NULL, 0);
+        }
+
+        free(b->targets[target_idx]);
+
+        b->count--;
+        for(int i = target_idx; i < b->count; i++) {
+            b->targets[i] = b->targets[i + 1];
+            b->children_pids[i] = b->children_pids[i + 1];
+        }
+
+        if(b->count == 0) {
+            free(b->source);
+
+            state->count--;
+            for(int i = idx; i < state->count; i++) {
+                state->backups[i] = state->backups[i + 1];
+            }
+
+            printf("[INFO] backup removed, not more targets\n");
+        } else {
+            printf("[INFO] backup target removed, there is %d remaining targets\n", b->count);
+        }
+    }
 }
+
 void cmd_restore(char** strs, int count, Backups *state) {
-    ;
+    char* src = strs[1];
+    char* target = strs[2];
+
+    char* abs_src = realpath(src, NULL);
+    if(!abs_src) {
+        fprintf(stderr, "[ERROR] given source file does not exists\n");
+        return;
+    }
+    char* abs_target = realpath(target, NULL);
+    if(!abs_target) {
+        free(abs_src);
+        fprintf(stderr, "[ERROR] given target file does not exists\n");
+        return;
+    }
+
+    printf("[INFO] starting restore\n");
+    dfs_restore(abs_src, abs_target);
+    dfs(abs_target, abs_src, abs_target, abs_src, 1);
+    printf("[INFO] done, restored\n");
+
+    free(abs_src);
+    free(abs_target);
 }
+
 void cmd_list(Backups *state) {
-    ;
+    if(state->count == 0) {
+        puts("[INFO] there is no backups currently");
+        return;
+    }
+    for(int i = 0; i < state->count; i++) {
+        Backup *b = &state->backups[i];
+        printf("%s\n", b->source);
+        for(int j = 0; j < b->count; j++) {
+            printf("\t-> %s\n", b->targets[j]);
+        }
+    }
 }
