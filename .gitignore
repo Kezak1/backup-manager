@@ -3,3 +3,4 @@ sop-backup
 *.o
 .idea/
 backup*/
+source*/

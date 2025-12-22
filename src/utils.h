@@ -1,4 +1,5 @@
-#pragma once
+#ifndef UTILS_H
+#define UTILS_H
 #include <sys/types.h>
 
 void set_handler(void (*f)(int), int sig_num);
@@ -14,3 +15,5 @@ int is_target_in_source(const char* source, const char* target);
 int checked_mkdir(const char* path);
 int make_path(const char* path);
 void ensure_parent_dirs(const char* path);
+
+#endif

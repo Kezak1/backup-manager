@@ -17,21 +17,12 @@
 #include <limits.h>
 
 #define FILE_BUF_LEN 256
-#define PATH_MAX 4096
 #define MAX_WATCHES 8192
 #define EVENT_BUF_LEN (64 * (sizeof(struct inotify_event) + NAME_MAX + 1))
 #define ERR(source) \
     (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), exit(EXIT_FAILURE))
 
-struct Watch {
-    int wd; // key
-    char *path; // value
-};
 
-struct WatchMap {
-    struct Watch watch_map[MAX_WATCHES];
-    int watch_count;
-};
 
 void copy_file(const char* src, const char* target) {
     int fd_src = open(src, O_RDONLY);
@@ -73,13 +64,13 @@ void copy_file(const char* src, const char* target) {
 
 void prep_symlink(const char* src, const char* abs_src, const char* abs_target, char *out, int out_size) {
     char path[PATH_MAX];
-    ssize_t len = readlink(src, path, sizeof(path) - 1);    
+    int len = readlink(src, path, sizeof(path) - 1);    
     if(len == -1) {
         ERR("readlink");
     }
     path[len] = '\0';
 
-    size_t abslen = strlen(abs_src);
+    int abslen = strlen(abs_src);
 
     if(path[0] == '/') {
         if(strncmp(path, abs_src, abslen) == 0) {
@@ -103,7 +94,7 @@ void prep_symlink(const char* src, const char* abs_src, const char* abs_target, 
 void copy_symlink(const char* src, const char* target, const char* abs_src, const char* abn_target) {
     char new_path[PATH_MAX];
     prep_symlink(src, abs_src, abn_target, new_path, sizeof(new_path));
-    (void)unlink(target);
+    unlink(target);
     if(symlink(new_path, target) == -1) {
         ERR("symlink");
     }
@@ -312,7 +303,7 @@ void dfs_remove(const char* path) {
     }
 }
 
-void dfs_restore(const char* src, const char* target) {
+void dfs_clean(const char* src, const char* target) {
     DIR* dir = opendir(src);
     if(!dir) {
         ERR("opendir");
@@ -353,7 +344,7 @@ void dfs_restore(const char* src, const char* target) {
         }
 
         if(S_ISDIR(st_src.st_mode)) {
-            dfs_restore(src_path, target_path);
+            dfs_clean(src_path, target_path);
         }
     }
 
@@ -362,7 +353,7 @@ void dfs_restore(const char* src, const char* target) {
     }
 }
 
-void dfs(const char* src, const char* target, const char* abs_src, const char* abs_target, int skip) {
+void dfs_sync(const char* src, const char* target, const char* abs_src, const char* abs_target, int skip) {
     DIR* dir = opendir(src);
     if(!dir) {
         ERR("opendir");
@@ -393,7 +384,7 @@ void dfs(const char* src, const char* target, const char* abs_src, const char* a
                 ERR("checked_mkdir");
             }
 
-            dfs(src_path, target_path, abs_src, abs_target, skip);
+            dfs_sync(src_path, target_path, abs_src, abs_target, skip);
         } else if(S_ISLNK(st.st_mode)) {
             if(!skip || !symlink_equal(src_path, target_path, abs_src, abs_target)) {
                 copy_symlink(src_path, target_path, abs_src, abs_target);
@@ -410,13 +401,23 @@ void dfs(const char* src, const char* target, const char* abs_src, const char* a
     }
 }
 
+struct Watch {
+    int wd;
+    char *path;
+};
+
+struct WatchMap {
+    struct Watch watch_map[MAX_WATCHES];
+    int watch_count;
+};
+
 void add_to_map(struct WatchMap *map, int wd, const char *path) {
     if (map->watch_count >= MAX_WATCHES) {
         fprintf(stderr, "[ERROR] exceeded max watches!\n");
         return;
     }
     map->watch_map[map->watch_count].wd = wd;
-    map->watch_map[map->watch_count].path = strdup(path); // Must copy the path!
+    map->watch_map[map->watch_count].path = strdup(path);
     map->watch_count++;
 }
 
@@ -642,7 +643,7 @@ void watcher(const char* abs_src, const char* abs_target) {
                 if(event->mask & IN_ISDIR) {
                     if (event->mask & IN_CREATE) {
                         checked_mkdir(target_path);
-                        dfs(event_path, target_path, abs_src, abs_target, 0);
+                        dfs_sync(event_path, target_path, abs_src, abs_target, 0);
                         add_watch_recursive(notify_fd, &map, event_path);
                     } if (event->mask & IN_DELETE) {
                         mirror_remove(target_path);
@@ -659,7 +660,7 @@ void watcher(const char* abs_src, const char* abs_target) {
                             pending_move_path[0] = '\0';
                         } else {
                             checked_mkdir(target_path);
-                            dfs(event_path, target_path, abs_src, abs_target, 0);
+                            dfs_sync(event_path, target_path, abs_src, abs_target, 0);
                             add_watch_recursive(notify_fd, &map, event_path);
                         }
                     }
@@ -684,7 +685,7 @@ void child_work(const char* abs_src, const char* abs_target) {
     if(!abs_src || !abs_target) {
         ERR("realpath");
     }
-    dfs(abs_src, abs_target, abs_src, abs_target, 0);
+    dfs_sync(abs_src, abs_target, abs_src, abs_target, 0);
     watcher(abs_src, abs_target);
 }
 
@@ -701,6 +702,7 @@ void cmd_add(char** strs, int count, Backups *state) {
 
     if(!is_source_valid(src) || !abs_src) {
         fprintf(stderr, "[ERROR] source is not valid directory\n");
+        free(abs_src);
         return;
     }
 
@@ -942,8 +944,8 @@ void cmd_restore(char** strs, int count, Backups *state) {
     }
 
     printf("[INFO] starting restore\n");
-    dfs_restore(abs_src, abs_target);
-    dfs(abs_target, abs_src, abs_target, abs_src, 1);
+    dfs_clean(abs_src, abs_target);
+    dfs_sync(abs_target, abs_src, abs_target, abs_src, 1);
     printf("[INFO] done, restored\n");
 
     free(abs_src);

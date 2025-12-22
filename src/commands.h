@@ -1,4 +1,6 @@
-#pragma once
+#ifndef COMMANDS_H
+#define COMMANDS_H
+
 #include <sys/types.h>
 
 #define MAX_BACKUP 100
@@ -22,3 +24,5 @@ void cmd_restore(char** strs, int count, Backups *state);
 void cmd_list(Backups *state);
 void clean_up_all(Backups *state);
 void dead_childrens(Backups *state);
+
+#endif

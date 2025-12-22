@@ -33,17 +33,8 @@ void usage() {
 }
 
 int main(void) {
-    for(int sig_num = 1; sig_num < NSIG; sig_num++) {
-        if (sig_num == SIGKILL || sig_num == SIGSTOP || sig_num == SIGCHLD) continue;
-        
-        if(sig_num == SIGINT || sig_num == SIGTERM) {
-            set_handler(exit_handler, sig_num);
-        } else {
-            set_handler(SIG_IGN, sig_num);
-        }
-    }
-
-    set_handler(SIG_DFL, SIGCHLD);
+    set_handler(exit_handler, SIGTERM);
+    set_handler(exit_handler, SIGINT);
 
     Backups state;
     state.count = 0;
@@ -70,6 +61,7 @@ int main(void) {
                 }
                 continue;
             }
+            puts("");
             free(line);
             clean_up_all(&state);
             break;
