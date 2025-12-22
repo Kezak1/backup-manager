@@ -47,7 +47,7 @@ char** split_string(const char* input_string, int* count)
         while(isspace((unsigned char)*p)) p++;
         if(!*p) break;
 
-        int in_quotes = 0;
+        char quote_char = 0;
         char *start = p, *end = p;
 
         while(*p) {
@@ -57,12 +57,18 @@ char** split_string(const char* input_string, int* count)
                 continue;
             }
 
-            if(*p == '"') {
-                in_quotes = 1 - in_quotes;
-                p++;
-                continue;
+            if(*p == '"' || *p == '\'') {
+                if(quote_char == 0) {
+                    quote_char = *p;
+                    p++;
+                    continue;
+                } else if(*p == quote_char) {
+                    quote_char = 0;
+                    p++;
+                    continue;
+                }
             }
-            if(in_quotes == 0 && isspace((unsigned char)*p)) break;
+            if(quote_char == 0 && isspace((unsigned char)*p)) break;
             
             *end++ = *p++;
         }
