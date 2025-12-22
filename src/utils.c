@@ -1,9 +1,12 @@
 #define _GNU_SOURCE
 #include "utils.h"
 
+#include <ctype.h>
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <ftw.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -11,23 +14,22 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
-#include <unistd.h>
-#include <errno.h>
-#include <ctype.h>
 #include <time.h>
-#include <signal.h>
+#include <unistd.h>
 
-#define ERR(source) \
-    (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), exit(EXIT_FAILURE))
+#define ERR(source) (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), exit(EXIT_FAILURE))
 
-void set_handler(void (*f)(int), int sig_num) {
+void set_handler(void (*f)(int), int sig_num)
+{
     struct sigaction act;
     memset(&act, 0, sizeof(act));
     act.sa_handler = f;
     sigemptyset(&act.sa_mask);
 
-    if (sigaction(sig_num, &act, NULL) == -1) {
-        if (errno == EINVAL) return;
+    if (sigaction(sig_num, &act, NULL) == -1)
+    {
+        if (errno == EINVAL)
+            return;
         ERR("sigaction");
     }
 }
@@ -42,56 +44,73 @@ char** split_string(const char* input_string, int* count)
     *count = 0;
     int cap = 0;
 
-    char *p = input_copy;
-    while(*p) {
-        while(isspace((unsigned char)*p)) p++;
-        if(!*p) break;
+    char* p = input_copy;
+    while (*p)
+    {
+        while (isspace((unsigned char)*p))
+            p++;
+        if (!*p)
+            break;
 
         char quote_char = 0;
         char *start = p, *end = p;
 
-        while(*p) {
-            if(*p == '\\' && p[1] != '\0') {
+        while (*p)
+        {
+            if (*p == '\\' && p[1] != '\0')
+            {
                 p++;
-                *end++ = *p++; 
+                *end++ = *p++;
                 continue;
             }
 
-            if(*p == '"' || *p == '\'') {
-                if(quote_char == 0) {
+            if (*p == '"' || *p == '\'')
+            {
+                if (quote_char == 0)
+                {
                     quote_char = *p;
                     p++;
                     continue;
-                } else if(*p == quote_char) {
+                }
+                else if (*p == quote_char)
+                {
                     quote_char = 0;
                     p++;
                     continue;
                 }
             }
-            if(quote_char == 0 && isspace((unsigned char)*p)) break;
-            
+            if (quote_char == 0 && isspace((unsigned char)*p))
+                break;
+
             *end++ = *p++;
         }
         int had_delim = (*p != '\0');
         *end = '\0';
 
-        if(*count == cap) {
-            if(cap) {
+        if (*count == cap)
+        {
+            if (cap)
+            {
                 cap *= 2;
-            } else {
+            }
+            else
+            {
                 cap = 4;
             }
-            output_strings = realloc(output_strings, cap * sizeof(char *));
-            if(!output_strings) ERR("realloc");
+            output_strings = realloc(output_strings, cap * sizeof(char*));
+            if (!output_strings)
+                ERR("realloc");
         }
 
         output_strings[*count] = strdup(start);
-        if(!output_strings[*count]) {
+        if (!output_strings[*count])
+        {
             ERR("strdup");
         }
-        
+
         (*count)++;
-        if (had_delim) p++; 
+        if (had_delim)
+            p++;
     }
 
     free(input_copy);
@@ -107,7 +126,7 @@ void free_strings(char** strings, int count)
     free(strings);
 }
 
-ssize_t bulk_read(int fd, char *buf, size_t count)
+ssize_t bulk_read(int fd, char* buf, size_t count)
 {
     ssize_t c;
     ssize_t len = 0;
@@ -125,7 +144,7 @@ ssize_t bulk_read(int fd, char *buf, size_t count)
     return len;
 }
 
-ssize_t bulk_write(int fd, char *buf, size_t count)
+ssize_t bulk_write(int fd, char* buf, size_t count)
 {
     ssize_t c;
     ssize_t len = 0;
@@ -141,59 +160,74 @@ ssize_t bulk_write(int fd, char *buf, size_t count)
     return len;
 }
 
-int path_exist(const char *path) {
+int path_exist(const char* path)
+{
     struct stat st;
     return stat(path, &st) == 0;
 }
 
-int is_source_valid(const char* path) {
+int is_source_valid(const char* path)
+{
     struct stat st;
-    if(stat(path, &st) != 0) {
+    if (stat(path, &st) != 0)
+    {
         return 0;
     }
     return S_ISDIR(st.st_mode);
 }
 
-int is_dir_empty(const char* path) {
+int is_dir_empty(const char* path)
+{
     DIR* dir = opendir(path);
-    if(!dir) {
+    if (!dir)
+    {
         return 0;
     }
 
-    struct dirent *dp;
+    struct dirent* dp;
     errno = 0;
 
-    while((dp = readdir(dir)) != NULL) {
-        if(strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0) {
+    while ((dp = readdir(dir)) != NULL)
+    {
+        if (strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0)
+        {
             continue;
         }
-        
-        if(closedir(dir)) {
+
+        if (closedir(dir))
+        {
             ERR("closedir");
         }
         return 0;
     }
 
-    if(errno != 0) {
+    if (errno != 0)
+    {
         ERR("readdir");
     }
-    if(closedir(dir)) {
+    if (closedir(dir))
+    {
         ERR("closedir");
     }
     return 1;
 }
 
-int checked_mkdir(const char* path) {
-    if(mkdir(path, 0755) != 0) {
-        if(errno != EEXIST) {
+int checked_mkdir(const char* path)
+{
+    if (mkdir(path, 0755) != 0)
+    {
+        if (errno != EEXIST)
+        {
             return -1;
         }
 
         struct stat s;
-        if(stat(path, &s)) {
+        if (stat(path, &s))
+        {
             return -1;
         }
-        if(!S_ISDIR(s.st_mode)) {
+        if (!S_ISDIR(s.st_mode))
+        {
             fprintf(stderr, "[ERROR] %s exists but is not a dir\n", path);
             return -1;
         }
@@ -202,16 +236,21 @@ int checked_mkdir(const char* path) {
     return 0;
 }
 
-int make_path(const char* path) {
+int make_path(const char* path)
+{
     char* tmp = strdup(path);
-    if(!tmp) {
+    if (!tmp)
+    {
         free(tmp);
         return -1;
     }
-    for(char *p = tmp + 1; *p; p++) {
-        if(*p == '/') {
+    for (char* p = tmp + 1; *p; p++)
+    {
+        if (*p == '/')
+        {
             *p = '\0';
-            if(checked_mkdir(tmp) == -1) {
+            if (checked_mkdir(tmp) == -1)
+            {
                 printf("[ERROR] failed checked_mkdir\n");
                 return -1;
             }
@@ -219,7 +258,8 @@ int make_path(const char* path) {
         }
     }
 
-    if(checked_mkdir(tmp)) {
+    if (checked_mkdir(tmp))
+    {
         printf("[ERROR] failed checked_mkdir\n");
         return -1;
     }
@@ -228,60 +268,72 @@ int make_path(const char* path) {
     return 0;
 }
 
-char* get_abs_path(const char* path) {
+char* get_abs_path(const char* path)
+{
     char* real = realpath(path, NULL);
-    if(real) return real;
+    if (real)
+        return real;
 
-    if(path[0] == '/') {
+    if (path[0] == '/')
+    {
         return strdup(path);
     }
 
-    char *cwd = getcwd(NULL, 0);
-    if(!cwd) {
+    char* cwd = getcwd(NULL, 0);
+    if (!cwd)
+    {
         return NULL;
     }
 
     int n = strlen(cwd) + strlen(path) + 2;
-    char* res = malloc(n); 
-    if(!res) {
+    char* res = malloc(n);
+    if (!res)
+    {
         free(cwd);
         return NULL;
     }
 
     snprintf(res, n, "%s/%s", cwd, path);
     free(cwd);
-    
+
     return res;
 }
 
-
-int is_target_in_source(const char* src, const char* target) {
+int is_target_in_source(const char* src, const char* target)
+{
     char* abs_src = realpath(src, NULL);
     char* abs_target = realpath(target, NULL);
 
-    if(!abs_target) {
+    if (!abs_target)
+    {
         char* tmp = strdup(target);
-        if(!tmp) {
+        if (!tmp)
+        {
             free(abs_src);
             ERR("strdup");
         }
 
-        while(1) {
+        while (1)
+        {
             abs_target = realpath(tmp, NULL);
-            if(abs_target) {
+            if (abs_target)
+            {
                 break;
             }
 
             char* last_slash = strrchr(tmp, '/');
-            if(!last_slash) {
+            if (!last_slash)
+            {
                 free(tmp);
                 free(abs_src);
                 return -1;
             }
-            if(last_slash == tmp) { 
+            if (last_slash == tmp)
+            {
                 tmp[1] = '\0';
                 abs_target = realpath(tmp, NULL);
-                if(abs_target) {
+                if (abs_target)
+                {
                     break;
                 }
 
@@ -299,9 +351,12 @@ int is_target_in_source(const char* src, const char* target) {
 
     int res = 0;
 
-    if(target_len >= src_len) {
-        if(strncmp(abs_target, abs_src, src_len) == 0) {
-            if(target_len == src_len || abs_target[src_len] == '/') {
+    if (target_len >= src_len)
+    {
+        if (strncmp(abs_target, abs_src, src_len) == 0)
+        {
+            if (target_len == src_len || abs_target[src_len] == '/')
+            {
                 res = 1;
             }
         }
@@ -312,20 +367,25 @@ int is_target_in_source(const char* src, const char* target) {
     return res;
 }
 
-void ensure_parent_dirs(const char* path) {
+void ensure_parent_dirs(const char* path)
+{
     char dir_path[PATH_MAX];
     int s = snprintf(dir_path, sizeof(dir_path), "%s", path);
-    if(s < 0 || s >= (int)sizeof(dir_path)) {
+    if (s < 0 || s >= (int)sizeof(dir_path))
+    {
         ERR("snprintf ensure_parent_dirs");
     }
 
     char* slash = strrchr(dir_path, '/');
-    if(!slash) return;
-    if(slash == dir_path) return;
+    if (!slash)
+        return;
+    if (slash == dir_path)
+        return;
 
     *slash = '\0';
 
-    if(make_path(dir_path) == -1) {
+    if (make_path(dir_path) == -1)
+    {
         ERR("make_path");
     }
 }

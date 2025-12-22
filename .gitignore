@@ -4,3 +4,4 @@ sop-backup
 .idea/
 backup*/
 source*/
+.clang-format
