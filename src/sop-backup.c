@@ -10,11 +10,13 @@
 #include <time.h>
 #include <unistd.h>
 #include <signal.h>
+#include <errno.h>
 
 #define ERR(source) \
     (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), exit(EXIT_FAILURE))
 
 volatile sig_atomic_t sig_exit = 0;
+volatile sig_atomic_t sigchld = 0;
 
 void exit_handler(int sig_num) {
     puts("");
@@ -32,7 +34,7 @@ void usage() {
 
 int main(void) {
     for(int sig_num = 1; sig_num < NSIG; sig_num++) {
-        if (sig_num == SIGKILL || sig_num == SIGSTOP) continue;
+        if (sig_num == SIGKILL || sig_num == SIGSTOP || sig_num == SIGCHLD) continue;
         
         if(sig_num == SIGINT || sig_num == SIGTERM) {
             set_handler(exit_handler, sig_num);
@@ -41,12 +43,16 @@ int main(void) {
         }
     }
 
+    set_handler(SIG_DFL, SIGCHLD);
+
     Backups state;
     state.count = 0;
 
-    printf("Welcome to the backup management system!\n\n");
+    printf("Welcome to the backup management system!\n");
+    usage();
     
     while(1) {
+        dead_childrens(&state);
         printf("command: ");
         fflush(stdout);
 
@@ -56,10 +62,18 @@ int main(void) {
         int cnt = 0;
 
         if(getline(&line, &len, stdin) == -1) {
+            if(errno == EINTR) {
+                free(line);
+                if (sig_exit) {
+                    clean_up_all(&state);
+                    break;
+                }
+                continue;
+            }
             free(line);
             clean_up_all(&state);
             break;
-        };
+        }
 
         size_t l = strlen(line);
         if(l > 0 && line[l - 1] == '\n') {

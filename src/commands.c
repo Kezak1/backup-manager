@@ -540,6 +540,61 @@ void mirror_remove(const char* target) {
     }
 }
 
+void free_watch_map(struct WatchMap *map) {
+    for(int i = 0; i < map->watch_count; i++) {
+        free(map->watch_map[i].path);
+    }
+    map->watch_count = 0;
+}
+
+void remove_target(Backups *state, int backup_idx, int target_idx) {
+    Backup *b = &state->backups[backup_idx];
+    free(b->targets[target_idx]);
+    b->targets[target_idx] = NULL;
+
+    b->count--;
+    for(int i = target_idx; i < b->count; i++) {
+        b->targets[i] = b->targets[i + 1];
+        b->children_pids[i] = b->children_pids[i + 1];
+    }
+
+    b->targets[b->count] = NULL;
+    b->children_pids[b->count] = -1;
+
+    if(b->count == 0) {
+        free(b->source);
+        b->source = NULL;
+
+        state->count--;
+        for(int i = backup_idx; i < state->count; i++) {
+            state->backups[i] = state->backups[i + 1];
+        }
+    }
+}
+
+int remove_by_pid(Backups *state, pid_t pid) {
+    for(int i = 0; i < state->count; i++) {
+        Backup *b = &state->backups[i];
+        for(int j = 0; j < b->count; j++) {
+            if(b->children_pids[j] == pid) {
+                remove_target(state, i, j);
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+void dead_childrens(Backups *state) {
+    int status;
+    pid_t pid;
+
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        remove_by_pid(state, pid);
+    }
+}
+
 void watcher(const char* abs_src, const char* abs_target) {
     int notify_fd = inotify_init();
     if (notify_fd < 0) {
@@ -577,6 +632,7 @@ void watcher(const char* abs_src, const char* abs_target) {
             if (event->mask & IN_IGNORED) {
                 remove_from_map(&map, event->wd);
             } else if ((event->mask & (IN_DELETE_SELF | IN_MOVE_SELF)) && watch && strcmp(watch->path, abs_src) == 0) {
+                free_watch_map(&map);
                 close(notify_fd);
                 return;
             } else {
@@ -620,6 +676,7 @@ void watcher(const char* abs_src, const char* abs_target) {
         }
     }
 
+    free_watch_map(&map);
     close(notify_fd);
 }
 
@@ -818,19 +875,19 @@ void cmd_end(char** strs, int count, Backups *state) {
 
         char* abs_src = realpath(src, NULL);
         if(!abs_src) {
-            fprintf(stderr, "[ERROR] given source file does not exists\n");
+            fprintf(stderr, "[ERROR] source %s file does not exists\n", src);
             return;
         }
         char* abs_target = realpath(target, NULL);
         if(!abs_target) {
             free(abs_src);
-            fprintf(stderr, "[ERROR] given target file does not exists\n");
+            fprintf(stderr, "[ERROR] target %s file does not exists\n", target);
             return;
         }
 
         int idx = find_backup_by_source(state, abs_src);
         if(idx < 0) {
-            fprintf(stderr, "[ERROR] given source is not found in current backups\n");
+            fprintf(stderr, "[ERROR] source %s is not found in current backups\n", abs_src);
             free(abs_src);
             free(abs_target);
             return;
@@ -846,45 +903,25 @@ void cmd_end(char** strs, int count, Backups *state) {
             }
         }
 
-        free(abs_src);
-        free(abs_target);
-
         if(target_idx == -1) {
-            fprintf(stderr, "[ERROR] given target is not found in given source\n");
+            fprintf(stderr, "[ERROR] target %s is not found in source %s\n", abs_target, abs_src);
+            free(abs_src);
+            free(abs_target);
             return;
         }
-
-        if(b->children_pids[target_idx] > 0) {
-            printf("[INFO] murdering this child [PID: %d]\n", b->children_pids[target_idx]);
-            if(-1 == kill(b->children_pids[target_idx], SIGTERM)) {
-                if(errno != ESRCH) {
-                    ERR("kill");
-                }
+        
+        int pid = b->children_pids[target_idx];
+        if(pid > 0) {
+            printf("[INFO] murdering this child [PID: %d]; it was doing backup from %s to %s\n", b->children_pids[target_idx], abs_src, abs_target);
+            if (kill(pid, SIGTERM) == -1 && errno != ESRCH) {
+                ERR("kill");
             }
-
-            waitpid(b->children_pids[target_idx], NULL, 0);
         }
 
-        free(b->targets[target_idx]);
+        remove_target(state, idx, target_idx);  
 
-        b->count--;
-        for(int i = target_idx; i < b->count; i++) {
-            b->targets[i] = b->targets[i + 1];
-            b->children_pids[i] = b->children_pids[i + 1];
-        }
-
-        if(b->count == 0) {
-            free(b->source);
-
-            state->count--;
-            for(int i = idx; i < state->count; i++) {
-                state->backups[i] = state->backups[i + 1];
-            }
-
-            printf("[INFO] backup removed, not more targets\n");
-        } else {
-            printf("[INFO] backup target removed, there is %d remaining targets\n", b->count);
-        }
+        free(abs_src);
+        free(abs_target);
     }
 }
 
@@ -914,8 +951,9 @@ void cmd_restore(char** strs, int count, Backups *state) {
 }
 
 void cmd_list(Backups *state) {
+    dead_childrens(state);
     if(state->count == 0) {
-        puts("[INFO] there is no backups currently");
+        puts("[INFO] there is no backups");
         return;
     }
     for(int i = 0; i < state->count; i++) {
