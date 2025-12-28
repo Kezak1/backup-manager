@@ -1,5 +1,5 @@
 # Backup Manger
-Interactive backup managemnt system for Linux. The system allows to create multiple backups for of selected local directories and maintain them by monitoring filesystem changes and synchronizing updates for the backup direcory.
+Interactive backup managemnt system for Linux. The system allows to create multiple backups for of selected local directories and maintain them by monitoring filesystem changes and synchronizing updates for the backup directory.
 
 ## Setup
 1. Requirements:
