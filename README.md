@@ -3,9 +3,9 @@ Interactive backup managemnt system for Linux. The system allows to create multi
 
 ## Setup
 1. Requirements:
-    - have Linux operating system with `inotify` support,
-    - have POSIX-compliant enviroment,
-    - have C compiler (`gcc` or `clang`).
+    - have Linux operating system with `inotify` support
+    - have POSIX-compliant enviroment
+    - have C compiler (`gcc` or `clang`)
     - `make`
 
 2. To build:
